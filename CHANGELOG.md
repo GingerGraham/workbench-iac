@@ -26,3 +26,11 @@ All notable changes to `workbench-iac` are documented here.
   unconditional call.
 - `WORKBENCH_OS`/`WORKBENCH_DISTRO`/`WORKBENCH_ARCH` replace
   `DOTFILES_OS`/`DOTFILES_DISTRO`.
+
+### Fixed
+
+- `avd`/`ave` aliases now target the `ansible-vault-decrypt`/
+  `ansible-vault-encrypt` wrapper functions instead of raw `ansible-vault
+  decrypt`/`encrypt` — previously the aliases bypassed the wrappers'
+  `vault_password_file`/`-p` handling entirely, while the `command -v`
+  guards gating the aliases checked those same always-defined wrappers.
