@@ -1,0 +1,29 @@
+# .dotfiles-sync.yml — workbench-iac
+#
+# Ecosystem module (workbench-core ARCHITECTURE.md §2/§3): Terraform/
+# OpenTofu/Terragrunt/Ansible aliases and installers. Meaningless
+# standalone — depends on workbench-core's loader and Core API.
+#
+# See contracts/manifest-spec.md (in workbench-core) for the full field
+# reference.
+version: 1
+branch: main
+
+core_api: ">=1.1 <2.0"
+sync:
+  enabled: true
+
+register:
+  shell:
+    - src: shell/terraform.sh
+      tier: tools
+    - src: shell/ansible.sh
+      tier: tools
+    - src: shell/completions/terraform.sh
+      tier: tools
+  installers:
+    - src: shell/installers.sh
+  getters:
+    - name: iac
+      function: get-iac-functions
+      label: "Terraform/OpenTofu/Terragrunt/Ansible helpers"
