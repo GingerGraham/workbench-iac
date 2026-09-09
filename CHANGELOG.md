@@ -4,6 +4,12 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added `installed-ansible`, `installed-terraform`, `installed-tenv`,
+  `installed-tflint` — reports install status to `wb tools upgrade`/
+  `wb tools list --status` (workbench-core §12 D43).
+
 ## [0.1.0] - 2026-09-09
 
 ### Added
