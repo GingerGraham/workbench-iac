@@ -85,6 +85,10 @@ install-ansible() {
     esac
 }
 
+installed-ansible() {
+    command -v ansible &>/dev/null
+}
+
 # ── Terraform install ─────────────────────────────────────────────────────────
 _tf-install-linux() {
     local tf_version="${1:-$(_iac_latest_terraform_version)}"
@@ -144,6 +148,10 @@ install-terraform() {
     else
         log_info "install-trivy not available (workbench-security not installed?) — skipping trivy scan tooling"
     fi
+}
+
+installed-terraform() {
+    command -v terraform &>/dev/null
 }
 
 # ── tenv install (OpenTofu / Terraform version manager) ───────────────────────
@@ -346,6 +354,10 @@ install-tenv() {
     return $rc
 }
 
+installed-tenv() {
+    command -v tenv &>/dev/null
+}
+
 # ── TFLint install ────────────────────────────────────────────────────────────
 _tflint-install-linux() {
     local ver
@@ -400,4 +412,8 @@ install-tflint() {
         Mac)   _tflint-install-mac ;;
         *)     log_error "Unsupported OS for tflint"; return 1 ;;
     esac
+}
+
+installed-tflint() {
+    command -v tflint &>/dev/null
 }
