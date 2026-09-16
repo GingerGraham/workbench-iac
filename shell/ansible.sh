@@ -5,6 +5,21 @@
 # `command -v ansible`.
 # Ported from workbench-precursor's tools/ansible.sh, unchanged.
 
+# Function/alias availability predicates — consumed automatically by
+# _get_functions_in/_get_aliases_in (workbench-core) to hide names that
+# can't actually be used on this host. See workbench-core's
+# docs/module-authoring.md, "Declaring function availability".
+#
+# Everything below is only ever defined once the `command -v ansible`
+# guard passes, but get-iac-functions' static-grep listing can't see that
+# runtime guard, so without this it would list ansible-vault-decrypt,
+# ansible-vault-encrypt, ap, avd, and ave even on hosts without ansible.
+# Declared here, ahead of the guard (unlike an early-return file, an
+# if-wrapped one like this can't reach a declaration placed after the
+# guard on a host where the guard fails), so the predicate is always
+# defined regardless of whether ansible itself is present.
+_wb_declare_availability ansible ansible-vault-decrypt ansible-vault-encrypt ap avd ave
+
 # ── functions ─────────────────────────────────────────────────────────────────
 if command -v ansible &>/dev/null; then
     ansible-vault-decrypt() {
