@@ -4,6 +4,20 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `get-iac-functions`/`wb functions` no longer list Terraform/OpenTofu/
+  Terragrunt aliases or `ansible-vault-decrypt`/`ansible-vault-encrypt`
+  (and `ap`/`avd`/`ave`) on hosts missing the underlying tool. These
+  were already self-gated at definition time (each block/file guards
+  itself on `command -v`), but the listing's static-grep extraction
+  couldn't see that runtime guard, so it showed them anyway. Declares
+  `_<name>-available` predicates (`_wb_declare_availability` for the
+  `otf*`/`hctf*`/`tg*`/`ansible-*` families, a hand-written OR predicate
+  for `tf*`'s OpenTofu-or-Terraform fallback aliases) per
+  `workbench-core`'s module-authoring.md "Declaring function
+  availability" convention.
+
 ### Added
 
 - **Agent-instruction files** (`AGENTS.md`, `CLAUDE.md`,

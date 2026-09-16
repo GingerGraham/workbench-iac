@@ -94,6 +94,30 @@ if command -v terragrunt &>/dev/null; then
     alias tgws="terragrunt workspace"
 fi
 
+# ── availability gating ─────────────────────────────────────────────────────
+# Function availability predicates — consumed automatically by
+# _get_functions_in/_get_aliases_in (workbench-core) to hide aliases that
+# can't actually be used on this host. See workbench-core's
+# docs/module-authoring.md, "Declaring function availability".
+#
+# otf*/hctf*/tg* are only ever defined once their own `command -v` guard
+# above has passed, but get-iac-functions' static-grep listing can't see
+# that runtime guard, so without these it would list them even on hosts
+# missing the underlying tool. Declare their availability predicates so
+# the listing matches reality.
+_wb_declare_availability tofu otf otfi otfp otfpd otfa otfaa otfd otfr otfsh otfsl otfo otfv otffmt otfva otfws
+_wb_declare_availability terraform hctf hctfi hctfp hctfpd hctfa hctfaa hctfd hctfr hctfsh hctfsl hctfo hctfv hctffmt hctfva hctfws
+_wb_declare_availability terragrunt tg tgi tgp tgpd tga tgaa tgd tgr tgo tgv tgfmt tgva tgws
+
+# tf*/otf's short aliases above fall back between OpenTofu and Terraform
+# (OpenTofu preferred when both are installed — see the alias blocks
+# above), so they still work with just one of the two present; only
+# genuinely unusable when neither is installed.
+_iac_tf_present() {
+    command -v tofu &>/dev/null || command -v terraform &>/dev/null
+}
+_wb_alias_availability _iac_tf_present tf tfi tfp tfpd tfa tfaa tfd tfr tfsh tfsl tfo tfv tffmt tfva tfws
+
 # ── functions ─────────────────────────────────────────────────────────────────
 get-latest-terraform-version() {
     curl -s https://checkpoint-api.hashicorp.com/v1/check/terraform \
