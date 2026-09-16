@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-16
+
 ### Fixed
 
 - `get-iac-functions`/`wb functions` no longer list Terraform/OpenTofu/
