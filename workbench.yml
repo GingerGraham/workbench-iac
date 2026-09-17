@@ -1,4 +1,4 @@
-# .dotfiles-sync.yml — workbench-iac
+# workbench.yml — workbench-iac
 #
 # Ecosystem module (workbench-core ARCHITECTURE.md §2/§3): Terraform/
 # OpenTofu/Terragrunt/Ansible aliases and installers. Meaningless
@@ -6,12 +6,15 @@
 #
 # See contracts/manifest-spec.md (in workbench-core) for the full field
 # reference.
-version: 1
+version: 2
 branch: main
 
 core_api: ">=1.2 <2.0"
 sync:
   enabled: true
+
+info:
+  description: "Terraform/OpenTofu/Terragrunt/Ansible aliases and installers"
 
 register:
   shell:
