@@ -4,6 +4,19 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **TFLint's installer script is now downloaded to a file and executed
+  from there, not piped through `bash <(curl …)`.** A failed download
+  (network error, an HTTP error page) is now caught before anything
+  runs, instead of bash trying to interpret whatever curl returned
+  (security review M3).
+- **The already cosign-verified tenv rpm install on openSUSE is now
+  annotated `pattern-scan:ignore`** so `workbench-core`'s CI pattern
+  scanner (which gained a check for `--allow-unsigned-rpm` in this
+  release cycle) doesn't flag it — the rpm's signature is independently
+  verified by `_tenv_fetch_and_verify` before this line ever runs.
+
 ## [0.3.0] - 2026-09-23
 
 ### Added

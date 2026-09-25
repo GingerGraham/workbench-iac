@@ -256,7 +256,7 @@ _tenv-install-rpm() {
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
     elif command -v zypper &>/dev/null; then
         # rpm is already cosign-verified by us; zypper's own GPG check is moot here.
-        ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"
+        ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"  # pattern-scan:ignore -- already cosign-verified above (_tenv_fetch_and_verify)
     else
         ${ec} yum install -y "${_TENV_VERIFIED_ASSET}"
     fi
@@ -375,8 +375,24 @@ _tflint-install-linux() {
 
     local install_path="${HOME}/.local/bin/tf-lint/tflint-${ver}"
     mkdir -p "${install_path}"
-    TFLINT_INSTALL_PATH="${install_path}" \
-        bash <(curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh)
+
+    # Fetch the installer script to a file before running it, rather than
+    # executing it straight off the network via process substitution — a
+    # failed download (network error, an HTTP error page from curl -s) is
+    # caught before anything runs, instead of bash trying to interpret
+    # whatever came back (security review M3). TFLint doesn't publish a
+    # signature or checksum for this script itself, so this narrows the
+    # window rather than closing it entirely.
+    local installer_script; installer_script="$(mktemp)"
+    if ! _download_file_robust "https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh" "${installer_script}"; then
+        log_error "Could not download the TFLint installer script"
+        rm -f "${installer_script}"
+        return 1
+    fi
+    TFLINT_INSTALL_PATH="${install_path}" bash "${installer_script}"
+    local install_rc=$?
+    rm -f "${installer_script}"
+    [[ ${install_rc} -eq 0 ]] || { log_error "TFLint installer script exited ${install_rc}"; return 1; }
 
     [[ -x "${install_path}/tflint" ]] || { log_error "TFLint install failed"; return 1; }
 
