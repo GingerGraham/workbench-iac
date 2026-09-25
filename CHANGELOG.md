@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-25
+
 ### Security
 
 - **TFLint's installer script is now downloaded to a file and executed
