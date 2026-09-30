@@ -4,6 +4,16 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **`install-tenv` on openSUSE no longer installs an unsigned RPM unless
+  cosign actually verified it.** The `zypper --allow-unsigned-rpm`
+  bypass is now gated on cosign having verified both the checksums file
+  and the asset; with cosign absent or signature assets missing it
+  refuses and points at `install-cosign`. With
+  `TENV_INSTALL_REQUIRE_COSIGN=true`, missing signature assets are now an
+  error on every distro (security review M3).
+
 ## [0.3.1] - 2026-09-25
 
 ### Security

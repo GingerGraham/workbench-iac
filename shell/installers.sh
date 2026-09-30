@@ -189,6 +189,10 @@ _tenv_cosign_verify() {
 _tenv_fetch_and_verify() {
     local tmp="$1" tag="$2" asset_pattern="$3" api_json="$4"
     _TENV_VERIFIED_ASSET=""
+    # true only once cosign has verified both the checksums file and the
+    # asset itself — read by _tenv-install-rpm before it bypasses zypper's
+    # signature check (security review M3).
+    _TENV_COSIGN_VERIFIED=false
 
     local asset_url sig_url pem_url sums_url sums_sig_url sums_pem_url
     asset_url="$(_tenv_asset_url     "${api_json}" "${asset_pattern}\$")"
@@ -222,6 +226,10 @@ _tenv_fetch_and_verify() {
             ( cd "${tmp}" && _tenv_cosign_verify \
                 "${asset}" "$(basename "${sig_url}")" "$(basename "${pem_url}")" "${tag}" ) \
                 || { log_error "tenv: cosign verification of ${asset} failed"; return 1; }
+            _TENV_COSIGN_VERIFIED=true
+        elif [[ "${TENV_INSTALL_REQUIRE_COSIGN:-false}" == "true" ]]; then
+            log_error "tenv: cosign required (TENV_INSTALL_REQUIRE_COSIGN=true) but signature assets are missing for ${tag}"
+            return 1
         else
             log_warn "tenv: cosign present but signature assets missing for ${tag} — skipping cosign step"
         fi
@@ -255,8 +263,15 @@ _tenv-install-rpm() {
     if command -v dnf &>/dev/null; then
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
     elif command -v zypper &>/dev/null; then
-        # rpm is already cosign-verified by us; zypper's own GPG check is moot here.
-        ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"  # pattern-scan:ignore -- already cosign-verified above (_tenv_fetch_and_verify)
+        # zypper refuses unsigned local RPMs. Bypass that only when cosign has
+        # verified this asset's signature — a same-release SHA-256 alone
+        # proves integrity, not origin (security review M3).
+        if [[ "${_TENV_COSIGN_VERIFIED:-false}" != "true" ]]; then
+            log_error "tenv: refusing to install an unsigned RPM without cosign verification. Run install-cosign (workbench-security) and retry."
+            rm -rf "${tmp}"
+            return 1
+        fi
+        ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"  # pattern-scan:ignore -- only reached after cosign verified the asset (_TENV_COSIGN_VERIFIED gate above)
     else
         ${ec} yum install -y "${_TENV_VERIFIED_ASSET}"
     fi
