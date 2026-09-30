@@ -397,9 +397,13 @@ _tflint-install-linux() {
     [[ -f "${tmp_dir}/tflint" ]] || { log_error "TFLint: binary not found in ${asset}"; rm -rf "${tmp_dir}"; return 1; }
 
     local install_path="${HOME}/.local/bin/tf-lint/tflint-${ver}"
-    mkdir -p "${install_path}"
-    install -m 755 "${tmp_dir}/tflint" "${install_path}/tflint"
+    # Fail fast, before any existing tflint is touched by the symlink swap below.
+    mkdir -p "${install_path}" \
+        || { log_error "TFLint: failed to create ${install_path}"; rm -rf "${tmp_dir}"; return 1; }
+    install -m 755 "${tmp_dir}/tflint" "${install_path}/tflint" \
+        || { log_error "TFLint: failed to install binary to ${install_path}"; rm -rf "${tmp_dir}"; return 1; }
     rm -rf "${tmp_dir}"
+    [[ -x "${install_path}/tflint" ]] || { log_error "TFLint: installed binary missing or not executable"; return 1; }
 
     local existing; existing="$(command -v tflint 2>/dev/null)"
     if [[ -n "${existing}" ]]; then
