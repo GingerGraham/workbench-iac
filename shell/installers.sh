@@ -20,7 +20,7 @@
 # not guaranteed to be loaded in that process.
 
 _iac_latest_terraform_version() {
-    curl -s https://checkpoint-api.hashicorp.com/v1/check/terraform \
+    curl -fsS https://checkpoint-api.hashicorp.com/v1/check/terraform \
         | tr -d '\r' \
         | grep -Eo '"current_version":"[0-9]+\.[0-9]+\.[0-9]+"' \
         | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+'
@@ -189,6 +189,10 @@ _tenv_cosign_verify() {
 _tenv_fetch_and_verify() {
     local tmp="$1" tag="$2" asset_pattern="$3" api_json="$4"
     _TENV_VERIFIED_ASSET=""
+    # true only once cosign has verified both the checksums file and the
+    # asset itself — read by _tenv-install-rpm before it bypasses zypper's
+    # signature check (security review M3).
+    _TENV_COSIGN_VERIFIED=false
 
     local asset_url sig_url pem_url sums_url sums_sig_url sums_pem_url
     asset_url="$(_tenv_asset_url     "${api_json}" "${asset_pattern}\$")"
@@ -222,6 +226,10 @@ _tenv_fetch_and_verify() {
             ( cd "${tmp}" && _tenv_cosign_verify \
                 "${asset}" "$(basename "${sig_url}")" "$(basename "${pem_url}")" "${tag}" ) \
                 || { log_error "tenv: cosign verification of ${asset} failed"; return 1; }
+            _TENV_COSIGN_VERIFIED=true
+        elif [[ "${TENV_INSTALL_REQUIRE_COSIGN:-false}" == "true" ]]; then
+            log_error "tenv: cosign required (TENV_INSTALL_REQUIRE_COSIGN=true) but signature assets are missing for ${tag}"
+            return 1
         else
             log_warn "tenv: cosign present but signature assets missing for ${tag} — skipping cosign step"
         fi
@@ -255,8 +263,15 @@ _tenv-install-rpm() {
     if command -v dnf &>/dev/null; then
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
     elif command -v zypper &>/dev/null; then
-        # rpm is already cosign-verified by us; zypper's own GPG check is moot here.
-        ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"  # pattern-scan:ignore -- already cosign-verified above (_tenv_fetch_and_verify)
+        # zypper refuses unsigned local RPMs. Bypass that only when cosign has
+        # verified this asset's signature — a same-release SHA-256 alone
+        # proves integrity, not origin (security review M3).
+        if [[ "${_TENV_COSIGN_VERIFIED:-false}" != "true" ]]; then
+            log_error "tenv: refusing to install an unsigned RPM without cosign verification. Run install-cosign (workbench-security) and retry."
+            rm -rf "${tmp}"
+            return 1
+        fi
+        ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"  # pattern-scan:ignore -- only reached after cosign verified the asset (_TENV_COSIGN_VERIFIED gate above)
     else
         ${ec} yum install -y "${_TENV_VERIFIED_ASSET}"
     fi
@@ -360,9 +375,10 @@ installed-tenv() {
 
 # ── TFLint install ────────────────────────────────────────────────────────────
 _tflint-install-linux() {
-    local ver
-    ver="$(curl -s https://api.github.com/repos/terraform-linters/tflint/releases/latest \
-        | grep '"tag_name":' | sed -E 's/.+"v([^"]+)".+/\1/')"
+    local api_response ver
+    api_response="$(curl -fsS https://api.github.com/repos/terraform-linters/tflint/releases/latest)" \
+        || { log_error "Could not query the latest TFLint release (network or GitHub API rate limit)"; return 1; }
+    ver="$(printf '%s' "${api_response}" | grep '"tag_name":' | sed -E 's/.+"v([^"]+)".+/\1/' | head -1)"
     [[ -z "${ver}" ]] && { log_error "Could not determine TFLint version"; return 1; }
 
     if command -v tflint &>/dev/null; then
@@ -373,28 +389,36 @@ _tflint-install-linux() {
 
     command -v unzip &>/dev/null || { log_error "unzip required for TFLint install"; return 1; }
 
+    local arch
+    case "${WORKBENCH_ARCH}" in
+        x86_64|amd64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) log_error "TFLint: unsupported architecture ${WORKBENCH_ARCH}"; return 1 ;;
+    esac
+
+    # Release zip verified against the SHA-256 GitHub publishes for it, or the
+    # release's checksums.txt — replaces running TFLint's installer script from master
+    # (security review M3).
+    local asset="tflint_linux_${arch}.zip"
+    local url="https://github.com/terraform-linters/tflint/releases/download/v${ver}/${asset}"
+    local expect
+    expect="$(_wb_gh_asset_digest "${api_response}" "${url}")"
+    [[ -z "${expect}" ]] && expect="sums:https://github.com/terraform-linters/tflint/releases/download/v${ver}/checksums.txt"
+
+    local tmp_dir; tmp_dir="$(mktemp -d)"
+    _wb_fetch_verified "${url}" "${tmp_dir}/${asset}" "${expect}" || { rm -rf "${tmp_dir}"; return 1; }
+    unzip -q -o "${tmp_dir}/${asset}" -d "${tmp_dir}" \
+        || { log_error "TFLint: failed to extract ${asset}"; rm -rf "${tmp_dir}"; return 1; }
+    [[ -f "${tmp_dir}/tflint" ]] || { log_error "TFLint: binary not found in ${asset}"; rm -rf "${tmp_dir}"; return 1; }
+
     local install_path="${HOME}/.local/bin/tf-lint/tflint-${ver}"
-    mkdir -p "${install_path}"
-
-    # Fetch the installer script to a file before running it, rather than
-    # executing it straight off the network via process substitution — a
-    # failed download (network error, an HTTP error page from curl -s) is
-    # caught before anything runs, instead of bash trying to interpret
-    # whatever came back (security review M3). TFLint doesn't publish a
-    # signature or checksum for this script itself, so this narrows the
-    # window rather than closing it entirely.
-    local installer_script; installer_script="$(mktemp)"
-    if ! _download_file_robust "https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh" "${installer_script}"; then
-        log_error "Could not download the TFLint installer script"
-        rm -f "${installer_script}"
-        return 1
-    fi
-    TFLINT_INSTALL_PATH="${install_path}" bash "${installer_script}"
-    local install_rc=$?
-    rm -f "${installer_script}"
-    [[ ${install_rc} -eq 0 ]] || { log_error "TFLint installer script exited ${install_rc}"; return 1; }
-
-    [[ -x "${install_path}/tflint" ]] || { log_error "TFLint install failed"; return 1; }
+    # Fail fast, before any existing tflint is touched by the symlink swap below.
+    mkdir -p "${install_path}" \
+        || { log_error "TFLint: failed to create ${install_path}"; rm -rf "${tmp_dir}"; return 1; }
+    install -m 755 "${tmp_dir}/tflint" "${install_path}/tflint" \
+        || { log_error "TFLint: failed to install binary to ${install_path}"; rm -rf "${tmp_dir}"; return 1; }
+    rm -rf "${tmp_dir}"
+    [[ -x "${install_path}/tflint" ]] || { log_error "TFLint: installed binary missing or not executable"; return 1; }
 
     local existing; existing="$(command -v tflint 2>/dev/null)"
     if [[ -n "${existing}" ]]; then
@@ -410,7 +434,7 @@ _tflint-install-linux() {
 
 _tflint-install-mac() {
     local ver
-    ver="$(curl -s https://api.github.com/repos/terraform-linters/tflint/releases/latest \
+    ver="$(curl -fsS https://api.github.com/repos/terraform-linters/tflint/releases/latest \
         | grep '"tag_name":' | sed -E 's/.+"v([^"]+)".+/\1/')"
     [[ -z "${ver}" ]] && { log_error "Could not determine TFLint version"; return 1; }
 
