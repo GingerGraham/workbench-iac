@@ -4,6 +4,14 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`install-ansible` (pip path) now fails clearly when the PyPI version
+  lookup fails.** The lookup uses `curl -fsS` with connect/overall timeouts
+  and checks curl's exit status, so a network or HTTP error aborts with a
+  message instead of being parsed as an empty version. Covered by the new
+  `tests/check-ansible-install.sh`.
+
 ## [0.3.2] - 2026-10-10
 
 ### Security
