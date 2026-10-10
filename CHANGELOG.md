@@ -6,6 +6,15 @@ All notable changes to `workbench-iac` are documented here.
 
 ### Security
 
+- **`install-tflint` no longer runs an installer script from TFLint's
+  `master` branch.** It now downloads the release zip and verifies it
+  against the SHA-256 GitHub publishes for the asset (falling back to the
+  release's `checksums.txt`) before installing; a missing or mismatching
+  hash aborts and leaves any existing install untouched (security review
+  M3).
+- **Version lookups fail on HTTP errors.** The TFLint and Terraform
+  version queries use `curl -fsS`, so an error page is no longer parsed as
+  a version.
 - **`install-tenv` on openSUSE no longer installs an unsigned RPM unless
   cosign actually verified it.** The `zypper --allow-unsigned-rpm`
   bypass is now gated on cosign having verified both the checksums file
@@ -13,6 +22,11 @@ All notable changes to `workbench-iac` are documented here.
   refuses and points at `install-cosign`. With
   `TENV_INSTALL_REQUIRE_COSIGN=true`, missing signature assets are now an
   error on every distro (security review M3).
+
+### Changed
+
+- **Raised the `core_api` floor to `>=1.4 <2.0`** for
+  `_wb_fetch_verified` / `_wb_gh_asset_digest`.
 
 ## [0.3.1] - 2026-09-25
 
