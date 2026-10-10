@@ -15,6 +15,13 @@ All notable changes to `workbench-iac` are documented here.
 - **Version lookups fail on HTTP errors.** The TFLint and Terraform
   version queries use `curl -fsS`, so an error page is no longer parsed as
   a version.
+- **`install-tenv` on openSUSE no longer installs an unsigned RPM unless
+  cosign actually verified it.** The `zypper --allow-unsigned-rpm`
+  bypass is now gated on cosign having verified both the checksums file
+  and the asset; with cosign absent or signature assets missing it
+  refuses and points at `install-cosign`. With
+  `TENV_INSTALL_REQUIRE_COSIGN=true`, missing signature assets are now an
+  error on every distro (security review M3).
 
 ### Changed
 
