@@ -4,6 +4,14 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **Documented exactly what `install-tenv` verifies per package manager.**
+  `dnf`/`yum` do not check local RPM signatures by default
+  (`localpkg_gpgcheck=0`), so without cosign that path is SHA-256 only; the
+  README now says so, alongside the zypper refusal and the apt/dpkg case.
+  No behaviour change.
+
 ## [0.3.2] - 2026-10-10
 
 ### Security
