@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-10
+
 ### Security
 
 - **`install-tflint` no longer runs an installer script from TFLint's
