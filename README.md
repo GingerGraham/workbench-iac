@@ -38,20 +38,23 @@ checksums file and the asset are also verified with cosign (keyless, pinned
 to tenv's release identity). Set `TENV_INSTALL_REQUIRE_COSIGN=true` to make
 missing cosign or missing signature assets a hard error on every distro.
 
-Installing a downloaded package is only as strong as that verification, and
-what the package manager adds on top differs:
+**Cosign is required for the package-based installs.** A local package handed
+to the package manager is not signature-checked against a trusted key, so
+`install-tenv` refuses to install a downloaded `.rpm` (`dnf`, `yum`, `zypper`)
+or `.deb` (`apt`/`dpkg`) unless cosign verified it, and tells you to run
+`install-cosign` (`workbench-security`) first. The reasons, per path:
 
-| Path | Package-manager signature check | Net effect without cosign |
-|---|---|---|
-| Fedora/RHEL (`dnf`, `yum`) local `.rpm` | **None by default** — `localpkg_gpgcheck` defaults to `0`, and `gpgcheck` only covers repository packages | SHA-256 only (integrity, not origin) |
-| openSUSE (`zypper`) local `.rpm` | zypper rejects an unsigned or untrusted local RPM, so `--allow-unsigned-rpm` would be required | **Refused** unless cosign verified the asset |
-| Debian/Ubuntu (`apt`/`dpkg`) local `.deb` | None for a local file | SHA-256 only |
+| Path | Package-manager signature check of a local file |
+|---|---|
+| Fedora/RHEL (`dnf`, `yum`) `.rpm` | **None by default** — `localpkg_gpgcheck` defaults to `0`, and `gpgcheck` only covers repository packages |
+| openSUSE (`zypper`) `.rpm` | Rejects an unsigned or untrusted local RPM, so `--allow-unsigned-rpm` is needed after cosign verification |
+| Debian/Ubuntu (`apt`/`dpkg`) `.deb` | None for a local file |
+
+The Arch (`pacman -U`) and generic tarball fallbacks are not gated; they are
+verified by the checksums file, plus cosign when it is installed.
 
 No tenv package-signing key is pinned by this module, so there is no
-`rpm -K`/`--checksig` step. If you want an RPM-level check on Fedora, set
-`localpkg_gpgcheck=1` in `/etc/dnf/dnf.conf` and import tenv's key yourself —
-dnf will then reject the install if the package is unsigned or its key is
-not trusted — or install cosign first.
+`rpm -K`/`--checksig` step.
 
 ## Requires
 
