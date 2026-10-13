@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FAILED=0
 check_no=0
 ok()   { check_no=$((check_no + 1)); echo "OK:   [$check_no] $*"; }
-fail() { check_no=$((check_no + 1)); echo "FAIL: [$check_no] $*"; FAILED=1; }
+fail() { check_no=$((check_no + 1)); echo "FAIL: [$check_no] $*"; FAILED=$((FAILED + 1)); }
 
 if ! command -v unzip >/dev/null 2>&1 || ! command -v zip >/dev/null 2>&1; then
     echo "SKIP: zip/unzip not available"
@@ -131,6 +131,35 @@ if ls "${H}/.local/bin"/.tflint.new.* >/dev/null 2>&1; then
     fail "temporary link left behind after failure"
 else
     ok "no temporary link left behind after failure"
+fi
+
+# 9-10. An existing tflint that is a symlink elsewhere on PATH is recorded and
+# removed on success, and put back (same target) when the final rename fails.
+make_other_symlink() {
+    local h="$1"
+    mkdir -p "${h}/other"
+    printf '#!/bin/sh\necho "TFLint version 0.0.1"\n' > "${h}/other/real-tflint"; chmod +x "${h}/other/real-tflint"
+    ln -s "${h}/other/real-tflint" "${h}/other/tflint"
+}
+
+H="$(new_home)"
+make_other_symlink "${H}"
+# shellcheck disable=SC2016  # the stub is eval'd later, expand then
+out="$(run_install "${H}" 'PATH="${HOME}/other:${PATH}"')"; rc=$?
+if [[ ${rc} -eq 0 && ! -e "${H}/other/tflint" && ! -L "${H}/other/tflint" && -L "${H}/.local/bin/tflint" ]]; then
+    ok "existing symlink elsewhere on PATH is removed and our link installed"
+else
+    fail "symlink displacement (rc=${rc}): ${out}"
+fi
+
+H="$(new_home)"
+make_other_symlink "${H}"
+# shellcheck disable=SC2016  # the stub is eval'd later, expand then
+out="$(run_install "${H}" 'PATH="${HOME}/other:${PATH}"; mv() { if [[ "${1:-}" == "-f" ]]; then return 1; fi; command mv "$@"; }')"; rc=$?
+if [[ ${rc} -ne 0 && -L "${H}/other/tflint" && "$(readlink "${H}/other/tflint")" == "${H}/other/real-tflint" && ! -e "${H}/.local/bin/tflint" ]]; then
+    ok "failed final rename restores the displaced symlink with its original target"
+else
+    fail "symlink restore (rc=${rc}): ${out}"
 fi
 
 echo
