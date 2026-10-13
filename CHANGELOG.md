@@ -14,6 +14,11 @@ All notable changes to `workbench-iac` are documented here.
 
 ### Fixed
 
+- **`install-ansible` (pip path) now fails clearly when the PyPI version
+  lookup fails.** The lookup uses `curl -fsS` with connect/overall timeouts
+  and checks curl's exit status, so a network or HTTP error aborts with a
+  message instead of being parsed as an empty version. Covered by the new
+  `tests/check-ansible-install.sh`.
 - **`install-tflint` no longer leaves a half-switched install when linking
   fails.** Every `ln`, `rm` and `mv` in the symlink swap is now checked: the
   new link is built under a temporary name, any existing `tflint` is moved
