@@ -4,6 +4,24 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Security
+
+- **`install-tenv` on Fedora/RHEL (`dnf`/`yum`) and Debian/Ubuntu (`apt`)
+  now requires cosign verification, as openSUSE already did.** Previously
+  these paths warned and installed on a same-release SHA-256 alone. They now
+  refuse with a message to run `install-cosign` (`workbench-security`) first,
+  because `dnf` (`localpkg_gpgcheck=0` by default) and `dpkg -i` do not
+  signature-check a local package (security review M3). **Behaviour change:**
+  install cosign before running `install-tenv` on those distros.
+
+### Changed
+
+- **Documented exactly what `install-tenv` verifies per package manager.**
+  `dnf`/`yum` do not check local RPM signatures by default
+  (`localpkg_gpgcheck=0`), so without cosign that path is SHA-256 only; the
+  README now says so, alongside the zypper refusal and the apt/dpkg case.
+  No behaviour change.
+
 ### Fixed
 
 - **`get-latest-terraform-version` and `get-latest-opentofu-version` now fail
