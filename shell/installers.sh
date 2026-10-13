@@ -255,7 +255,8 @@ _tenv-install-rpm() {
         aarch64|arm64) arch="arm64" ;;
         *) log_error "tenv: unsupported architecture ${WORKBENCH_ARCH}"; return 1 ;;
     esac
-    local tmp; tmp="$(mktemp -d)"
+    local tmp; tmp="$(mktemp -d)" \
+        || { log_error "tenv: could not create a temporary directory"; return 1; }
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.rpm" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
@@ -285,7 +286,8 @@ _tenv-install-deb() {
         aarch64|arm64) arch="arm64" ;;
         *) log_error "tenv: unsupported architecture ${WORKBENCH_ARCH}"; return 1 ;;
     esac
-    local tmp; tmp="$(mktemp -d)"
+    local tmp; tmp="$(mktemp -d)" \
+        || { log_error "tenv: could not create a temporary directory"; return 1; }
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.deb" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
@@ -296,7 +298,8 @@ _tenv-install-deb() {
 
 _tenv-install-arch() {
     local tag="$1" api_json="$2"
-    local tmp; tmp="$(mktemp -d)"
+    local tmp; tmp="$(mktemp -d)" \
+        || { log_error "tenv: could not create a temporary directory"; return 1; }
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_.*\.pkg\.tar\.zst" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
@@ -309,7 +312,8 @@ _tenv-install-arch() {
 # on _Linux_*.tar.gz to stay robust to the goreleaser arch token (x86_64 vs amd64).
 _tenv-install-tarball() {
     local tag="$1" api_json="$2"
-    local tmp; tmp="$(mktemp -d)"
+    local tmp; tmp="$(mktemp -d)" \
+        || { log_error "tenv: could not create a temporary directory"; return 1; }
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_Linux_.*\.tar\.gz" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: extracting to ~/.local/bin ..."
@@ -405,7 +409,8 @@ _tflint-install-linux() {
     expect="$(_wb_gh_asset_digest "${api_response}" "${url}")"
     [[ -z "${expect}" ]] && expect="sums:https://github.com/terraform-linters/tflint/releases/download/v${ver}/checksums.txt"
 
-    local tmp_dir; tmp_dir="$(mktemp -d)"
+    local tmp_dir; tmp_dir="$(mktemp -d)" \
+        || { log_error "TFLint: could not create a temporary directory"; return 1; }
     _wb_fetch_verified "${url}" "${tmp_dir}/${asset}" "${expect}" || { rm -rf "${tmp_dir}"; return 1; }
     unzip -q -o "${tmp_dir}/${asset}" -d "${tmp_dir}" \
         || { log_error "TFLint: failed to extract ${asset}"; rm -rf "${tmp_dir}"; return 1; }

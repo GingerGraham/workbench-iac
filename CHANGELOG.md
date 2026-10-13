@@ -4,6 +4,17 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`get-latest-terraform-version` and `get-latest-opentofu-version` now fail
+  clearly.** They use `curl -fsS` with connect/overall timeouts and return
+  non-zero with an error message on a network/HTTP failure or an
+  unparseable response, instead of silently printing nothing.
+- **The tenv installers abort if their temporary directory cannot be
+  created.** `mktemp -d` is checked in every package path (and in the TFLint
+  installer) rather than carrying on with an empty directory path. Covered
+  by the new `tests/check-version-lookups.sh`.
+
 ## [0.3.2] - 2026-10-10
 
 ### Security

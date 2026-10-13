@@ -120,17 +120,25 @@ _wb_alias_availability _iac_tf_present tf tfi tfp tfpd tfa tfaa tfd tfr tfsh tfs
 
 # ── functions ─────────────────────────────────────────────────────────────────
 get-latest-terraform-version() {
-    curl -s https://checkpoint-api.hashicorp.com/v1/check/terraform \
-        | tr -d '\r' \
+    local json version
+    json="$(curl -fsS --connect-timeout 30 --max-time 60 https://checkpoint-api.hashicorp.com/v1/check/terraform)" \
+        || { log_error "Could not query HashiCorp for the latest Terraform version (network or HTTP error)"; return 1; }
+    version="$(printf '%s' "${json}" | tr -d '\r' \
         | grep -Eo '"current_version":"[0-9]+\.[0-9]+\.[0-9]+"' \
-        | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+'
+        | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    [[ -z "${version}" ]] && { log_error "Could not determine the latest Terraform version"; return 1; }
+    printf '%s\n' "${version}"
 }
 
 get-latest-opentofu-version() {
-    curl -s https://api.github.com/repos/opentofu/opentofu/releases/latest \
-        | tr -d '\r' \
+    local json version
+    json="$(curl -fsS --connect-timeout 30 --max-time 60 https://api.github.com/repos/opentofu/opentofu/releases/latest)" \
+        || { log_error "Could not query GitHub for the latest OpenTofu version (network, HTTP error or API rate limit)"; return 1; }
+    version="$(printf '%s' "${json}" | tr -d '\r' \
         | grep -Eo '"tag_name": ?"v[0-9]+\.[0-9]+\.[0-9]+"' \
-        | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+'
+        | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    [[ -z "${version}" ]] && { log_error "Could not determine the latest OpenTofu version"; return 1; }
+    printf '%s\n' "${version}"
 }
 
 get-iac-functions() {
