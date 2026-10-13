@@ -12,6 +12,16 @@ All notable changes to `workbench-iac` are documented here.
   README now says so, alongside the zypper refusal and the apt/dpkg case.
   No behaviour change.
 
+### Fixed
+
+- **`install-tflint` no longer leaves a half-switched install when linking
+  fails.** Every `ln`, `rm` and `mv` in the symlink swap is now checked: the
+  new link is built under a temporary name, any existing `tflint` is moved
+  aside in a way that can be undone, and the previous install is restored if
+  the final rename fails. A failure now returns non-zero with a clear error
+  instead of logging "installed". Covered by the new
+  `tests/check-tflint-install.sh`.
+
 ## [0.3.2] - 2026-10-10
 
 ### Security
