@@ -11,6 +11,13 @@ All notable changes to `workbench-iac` are documented here.
   and checks curl's exit status, so a network or HTTP error aborts with a
   message instead of being parsed as an empty version. Covered by the new
   `tests/check-ansible-install.sh`.
+- **`install-tflint` no longer leaves a half-switched install when linking
+  fails.** Every `ln`, `rm` and `mv` in the symlink swap is now checked: the
+  new link is built under a temporary name, any existing `tflint` is moved
+  aside in a way that can be undone, and the previous install is restored if
+  the final rename fails. A failure now returns non-zero with a clear error
+  instead of logging "installed". Covered by the new
+  `tests/check-tflint-install.sh`.
 
 ## [0.3.2] - 2026-10-10
 
