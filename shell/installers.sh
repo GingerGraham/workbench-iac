@@ -64,8 +64,10 @@ _ansible-add-ppa() {
 
 _ansible-install-python() {
     command -v pip3 &>/dev/null || { log_error "pip3 is required"; return 1; }
-    local latest
-    latest="$(curl -s https://pypi.org/pypi/ansible/json | grep -Eo '"version":"[0-9]+\.[0-9]+\.[0-9]+",' | sed -E 's/.+"([0-9]+\.[0-9]+\.[0-9]+)",/\1/' | head -1)"
+    local pypi_json latest
+    pypi_json="$(curl -fsS --connect-timeout 30 --max-time 60 https://pypi.org/pypi/ansible/json)" \
+        || { log_error "Could not query PyPI for the latest Ansible version (network or HTTP error)"; return 1; }
+    latest="$(printf '%s' "${pypi_json}" | grep -Eo '"version": *"[0-9]+\.[0-9]+\.[0-9]+",' | sed -E 's/.+"([0-9]+\.[0-9]+\.[0-9]+)",/\1/' | head -1)"
     [[ -z "${latest}" ]] && { log_error "Could not determine latest Ansible version"; return 1; }
     log_info "Installing Ansible ${latest} via pip3..."
     pip3 install --upgrade ansible --disable-pip-version-check
@@ -425,15 +427,46 @@ _tflint-install-linux() {
     rm -rf "${tmp_dir}"
     [[ -x "${install_path}/tflint" ]] || { log_error "TFLint: installed binary missing or not executable"; return 1; }
 
-    local existing; existing="$(command -v tflint 2>/dev/null)"
-    if [[ -n "${existing}" ]]; then
-        if [[ -L "${existing}" ]]; then
-            rm "${existing}"
+    # Swap the tflint on PATH for the new one without ever leaving a partial
+    # state: build the new symlink under a temporary name first, displace any
+    # existing tflint in a way that can be undone, rename the new link into
+    # place, and put everything back if that last step fails. Every step is
+    # checked; a failure leaves the previous install exactly as it was.
+    local bin_dir="${HOME}/.local/bin"
+    local link="${bin_dir}/tflint"
+    local tmp_link="${bin_dir}/.tflint.new.$$"
+    mkdir -p "${bin_dir}" \
+        || { log_error "TFLint: failed to create ${bin_dir}"; return 1; }
+    rm -f "${tmp_link}"
+    ln -s "${install_path}/tflint" "${tmp_link}" \
+        || { log_error "TFLint: failed to create symlink ${tmp_link}"; rm -f "${tmp_link}"; return 1; }
+
+    local existing displaced="" restore_target=""
+    existing="$(command -v tflint 2>/dev/null)"
+    if [[ "${existing}" == /* && ( -e "${existing}" || -L "${existing}" ) ]]; then
+        if [[ -L "${existing}" && "${existing}" == "${link}" ]]; then
+            : # our own link: the rename below replaces it atomically
+        elif [[ -L "${existing}" ]]; then
+            restore_target="$(readlink "${existing}")"
+            rm -f "${existing}" \
+                || { log_error "TFLint: could not remove existing symlink ${existing}"; rm -f "${tmp_link}"; return 1; }
+            displaced="removed"
         else
-            mv "${existing}" "${existing}.old"
+            mv "${existing}" "${existing}.old" \
+                || { log_error "TFLint: could not move existing ${existing} aside"; rm -f "${tmp_link}"; return 1; }
+            displaced="moved"
         fi
     fi
-    ln -sf "${install_path}/tflint" "${HOME}/.local/bin/tflint"
+
+    if ! mv -f "${tmp_link}" "${link}"; then
+        log_error "TFLint: failed to link ${link}; restoring the previous install"
+        rm -f "${tmp_link}"
+        case "${displaced}" in
+            moved)   mv "${existing}.old" "${existing}" || log_error "TFLint: could not restore ${existing} from ${existing}.old" ;;
+            removed) ln -s "${restore_target}" "${existing}" || log_error "TFLint: could not restore symlink ${existing} -> ${restore_target}" ;;
+        esac
+        return 1
+    fi
     log_info "TFLint ${ver} installed"
 }
 
