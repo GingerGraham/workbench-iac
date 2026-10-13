@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-13
+
 ### Security
 
 - **`install-tenv` on Fedora/RHEL (`dnf`/`yum`) and Debian/Ubuntu (`apt`)
