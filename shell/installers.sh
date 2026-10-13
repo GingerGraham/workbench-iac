@@ -159,9 +159,10 @@ installed-terraform() {
 # ── tenv install (OpenTofu / Terraform version manager) ───────────────────────
 # Upstream: https://github.com/tofuutils/tenv
 # Release artifacts are cosign-signed. We verify the checksums file and the asset
-# with cosign when it's present, then always confirm the SHA256. Without cosign
-# we fall back to SHA256-only (set TENV_INSTALL_REQUIRE_COSIGN=true to make
-# cosign mandatory).
+# with cosign when it's present, then always confirm the SHA256. The rpm and
+# deb installs (dnf/yum/zypper/apt) additionally REQUIRE cosign verification
+# (_tenv_require_cosign_verified); the pacman and tarball fallbacks accept
+# SHA256-only unless TENV_INSTALL_REQUIRE_COSIGN=true.
 
 # Extract a browser_download_url whose filename matches an extended regex.
 _tenv_asset_url() {
@@ -250,6 +251,19 @@ _tenv_fetch_and_verify() {
     return 0
 }
 
+# _tenv_require_cosign_verified <package-kind>
+# Fails closed unless _tenv_fetch_and_verify recorded a cosign verification of
+# the asset. A local package handed to dnf/yum/dpkg is not signature-checked by
+# the package manager (dnf: localpkg_gpgcheck defaults to 0; dpkg -i: never),
+# so without cosign the only protection is a same-release SHA-256, which
+# proves integrity but not origin (security review M3).
+_tenv_require_cosign_verified() {
+    if [[ "${_TENV_COSIGN_VERIFIED:-false}" != "true" ]]; then
+        log_error "tenv: refusing to install a downloaded $1 package without cosign verification. Run install-cosign (workbench-security) first, then retry."
+        return 1
+    fi
+}
+
 _tenv-install-rpm() {
     local tag="$1" api_json="$2" arch
     case "${WORKBENCH_ARCH}" in
@@ -260,27 +274,21 @@ _tenv-install-rpm() {
     local tmp; tmp="$(mktemp -d)"
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.rpm" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
+    # Every rpm path (dnf, yum, zypper) installs a local file that the package
+    # manager does not verify against a trusted key, so require cosign first.
+    _tenv_require_cosign_verified rpm || { rm -rf "${tmp}"; return 1; }
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     if command -v dnf &>/dev/null; then
-        # NOTE: dnf does not check the signature of a LOCAL rpm unless
-        # localpkg_gpgcheck=1 is set (default 0, and gpgcheck= only governs
-        # repository packages). What protects this install is therefore only
-        # what _tenv_fetch_and_verify did above: cosign (checksums file and
-        # asset) when cosign is installed, else a same-release SHA-256, which
-        # proves integrity but not origin. No tenv RPM signing key is pinned
-        # here, so there is nothing to `rpm -K` against; see README.md "What
-        # install-tenv verifies".
+        # dnf does not check the signature of a LOCAL rpm unless
+        # localpkg_gpgcheck=1 (default 0), which is why cosign verification is
+        # required above. No tenv RPM signing key is pinned, so there is
+        # nothing to `rpm -K` against; see README.md "What install-tenv
+        # verifies".
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
     elif command -v zypper &>/dev/null; then
-        # zypper refuses unsigned local RPMs. Bypass that only when cosign has
-        # verified this asset's signature — a same-release SHA-256 alone
-        # proves integrity, not origin (security review M3).
-        if [[ "${_TENV_COSIGN_VERIFIED:-false}" != "true" ]]; then
-            log_error "tenv: refusing to install an unsigned RPM without cosign verification. Run install-cosign (workbench-security) and retry."
-            rm -rf "${tmp}"
-            return 1
-        fi
+        # zypper refuses unsigned local RPMs; bypassed only after the cosign
+        # gate above (security review M3).
         ${ec} zypper --non-interactive install --allow-unsigned-rpm "${_TENV_VERIFIED_ASSET}"  # pattern-scan:ignore -- only reached after cosign verified the asset (_TENV_COSIGN_VERIFIED gate above)
     else
         ${ec} yum install -y "${_TENV_VERIFIED_ASSET}"
@@ -298,6 +306,8 @@ _tenv-install-deb() {
     local tmp; tmp="$(mktemp -d)"
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.deb" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
+    # dpkg -i does no signature check of a local .deb, so require cosign.
+    _tenv_require_cosign_verified deb || { rm -rf "${tmp}"; return 1; }
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     ${ec} dpkg -i "${_TENV_VERIFIED_ASSET}" || ${ec} apt-get install -f -y
