@@ -64,8 +64,10 @@ _ansible-add-ppa() {
 
 _ansible-install-python() {
     command -v pip3 &>/dev/null || { log_error "pip3 is required"; return 1; }
-    local latest
-    latest="$(curl -s https://pypi.org/pypi/ansible/json | grep -Eo '"version":"[0-9]+\.[0-9]+\.[0-9]+",' | sed -E 's/.+"([0-9]+\.[0-9]+\.[0-9]+)",/\1/' | head -1)"
+    local pypi_json latest
+    pypi_json="$(curl -fsS --connect-timeout 30 --max-time 60 https://pypi.org/pypi/ansible/json)" \
+        || { log_error "Could not query PyPI for the latest Ansible version (network or HTTP error)"; return 1; }
+    latest="$(printf '%s' "${pypi_json}" | grep -Eo '"version": *"[0-9]+\.[0-9]+\.[0-9]+",' | sed -E 's/.+"([0-9]+\.[0-9]+\.[0-9]+)",/\1/' | head -1)"
     [[ -z "${latest}" ]] && { log_error "Could not determine latest Ansible version"; return 1; }
     log_info "Installing Ansible ${latest} via pip3..."
     pip3 install --upgrade ansible --disable-pip-version-check
