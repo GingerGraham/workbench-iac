@@ -263,6 +263,14 @@ _tenv-install-rpm() {
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     if command -v dnf &>/dev/null; then
+        # NOTE: dnf does not check the signature of a LOCAL rpm unless
+        # localpkg_gpgcheck=1 is set (default 0, and gpgcheck= only governs
+        # repository packages). What protects this install is therefore only
+        # what _tenv_fetch_and_verify did above: cosign (checksums file and
+        # asset) when cosign is installed, else a same-release SHA-256, which
+        # proves integrity but not origin. No tenv RPM signing key is pinned
+        # here, so there is nothing to `rpm -K` against; see README.md "What
+        # install-tenv verifies".
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
     elif command -v zypper &>/dev/null; then
         # zypper refuses unsigned local RPMs. Bypass that only when cosign has
