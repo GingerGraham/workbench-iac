@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 FAILED=0
 check_no=0
 ok()   { check_no=$((check_no + 1)); echo "OK:   [$check_no] $*"; }
-fail() { check_no=$((check_no + 1)); echo "FAIL: [$check_no] $*"; FAILED=1; }
+fail() { check_no=$((check_no + 1)); echo "FAIL: [$check_no] $*"; FAILED=$((FAILED + 1)); }
 
 # run_lookup <curl-stub-body>
 # Runs _ansible-install-python in a subshell; echoes output, exits with its rc.
