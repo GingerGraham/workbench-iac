@@ -47,11 +47,14 @@ source list for `apt.releases.hashicorp.com`), `install-terraform` uses it as
 it is and writes nothing of its own.
 
 **tenv is the alternative** (`wb tools install tenv`), for switching between
-terraform and OpenTofu versions. Installing both means two programs provide
-`terraform`; the one earlier on your `PATH` runs. If you still have tfenv
-in `~/.tfenv`, its shim shadows this install while `~/.tfenv/bin` is on
-`PATH`: remove `~/.tfenv`, or keep using tfenv yourself. workbench never
-touches it.
+terraform and OpenTofu versions. If tenv is already installed,
+`install-terraform` warns and points you at `tenv tf install` instead:
+installing both means two programs provide `terraform`, and the one earlier
+on your `PATH` runs. On the release-zip route it stops rather than overwrite
+tenv's own `terraform` proxy in `~/.local/bin`. If you still have tfenv in
+`~/.tfenv`, it warns the same way and points you at `tfenv install`: its
+shim shadows this install while `~/.tfenv/bin` is on `PATH`. Remove
+`~/.tfenv` to switch. workbench never touches it.
 
 ## What `install-tenv` verifies
 

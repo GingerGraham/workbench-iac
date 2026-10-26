@@ -175,7 +175,9 @@ else
 fi
 
 # 2. install-trivy and tfenv are gone from install-terraform
-if grep -vE '^[[:space:]]*#' "${REPO_ROOT}/shell/installers.sh" | grep -qE 'install-trivy|tfenv (install|use)|tfutils/tfenv'; then
+# Log messages are left out: the tfenv warning tells the user which tfenv
+# commands they can run.
+if grep -vE '^[[:space:]]*#|log_(info|warn|error) ' "${REPO_ROOT}/shell/installers.sh" | grep -qE 'install-trivy|tfenv (install|use)|tfutils/tfenv'; then
     fail "shell/installers.sh still runs tfenv or install-trivy"
 else
     ok "install-terraform no longer runs tfenv or install-trivy"
@@ -303,11 +305,32 @@ new_scenario; remember_scratch
 mkdir -p "${T_HOME}/.tfenv/bin"; printf '#!/bin/sh\n' > "${T_HOME}/.tfenv/bin/tfenv"
 cp "${T_HOME}/.tfenv/bin/tfenv" "${WORK}/tfenv.orig"
 out="$(WORKBENCH_OS=Linux WORKBENCH_DISTRO=rhel tf_run stub eval "${dispatch_probe}; install-terraform")"; rc=$?
-if [[ ${rc} -eq 0 && "${out}" == *"workbench no longer manages tfenv"* && "${out}" == *"ROUTE: rpm"* && "${out}" == *"TFLINT"* ]] \
+if [[ ${rc} -eq 0 && "${out}" == *"tfenv is installed"* && "${out}" == *"tfenv install latest"* \
+      && "${out}" == *"ROUTE: rpm"* && "${out}" == *"TFLINT"* ]] \
    && cmp -s "${WORK}/tfenv.orig" "${T_HOME}/.tfenv/bin/tfenv"; then
-    ok "existing ~/.tfenv: warns, carries on, leaves ~/.tfenv alone"
+    ok "existing ~/.tfenv: warns, points at tfenv, carries on, leaves ~/.tfenv alone"
 else
     fail "tfenv warning (rc=${rc}): ${out}"
+fi
+
+# An installed tenv: warn and point at tenv, then carry on.
+new_scenario; remember_scratch
+mkdir -p "${T_HOME}/.local/bin"; printf '#!/bin/sh\n' > "${T_HOME}/.local/bin/tenv"; chmod +x "${T_HOME}/.local/bin/tenv"
+out="$(WORKBENCH_OS=Linux WORKBENCH_DISTRO=rhel tf_run stub eval "${dispatch_probe}; install-terraform")"; rc=$?
+if [[ ${rc} -eq 0 && "${out}" == *"tenv is installed"* && "${out}" == *"tenv tf install latest"* && "${out}" == *"ROUTE: rpm"* ]]; then
+    ok "installed tenv: warns, points at tenv, carries on"
+else
+    fail "tenv warning (rc=${rc}): ${out}"
+fi
+
+# The zip route never overwrites tenv's terraform proxy in ~/.local/bin.
+printf '#!/bin/sh\necho tenv-proxy\n' > "${T_HOME}/.local/bin/terraform"; chmod +x "${T_HOME}/.local/bin/terraform"
+cp "${T_HOME}/.local/bin/terraform" "${WORK}/proxy.orig"
+out="$(WORKBENCH_OS=Linux WORKBENCH_ARCH=x86_64 tf_run stub _tf-install-zip 1.9.0)"; rc=$?
+if [[ ${rc} -ne 0 && "${out}" == *"tenv's proxy"* ]] && cmp -s "${WORK}/proxy.orig" "${T_HOME}/.local/bin/terraform"; then
+    ok "zip route: refuses to overwrite tenv's ~/.local/bin/terraform proxy"
+else
+    fail "zip route with tenv proxy (rc=${rc}): ${out}"
 fi
 
 # ── zip (signature + checksum) ───────────────────────────────────────────────

@@ -30,7 +30,10 @@ All notable changes to `workbench-iac` are documented here.
   as it is. tfenv was cloned from its default branch, checked terraform
   against `SHA256SUMS` only, and its update path wrote into the current
   directory (H7). An existing `~/.tfenv` is left alone, with a warning that
-  its shim shadows the new install while `~/.tfenv/bin` is on `PATH`.
+  its shim shadows the new install while `~/.tfenv/bin` is on `PATH` and
+  that you can keep using tfenv instead. With tenv installed it warns and
+  points you at `tenv tf install`; the release-zip route then stops rather
+  than overwrite tenv's `terraform` proxy in `~/.local/bin`.
   tenv (`wb tools install tenv`) is the alternative for several versions.
 - `install-terraform` no longer tries `install-trivy`; under `wb tools` it
   never ran.

@@ -145,11 +145,24 @@ _tf_vendor_source_present() {
     return 1
 }
 
-# _tf_warn_tfenv — once per install-terraform, when a tfenv install exists.
-# ~/.tfenv is the user's own from here on; never touched.
-_tf_warn_tfenv() {
-    [[ -e "${HOME}/.tfenv/bin/tfenv" ]] || return 0
-    log_warn "workbench no longer manages tfenv. Its terraform shim shadows this install while ~/.tfenv/bin is on PATH. Remove ~/.tfenv, or keep using tfenv yourself."
+# _tf_tenv_present — tenv is installed: on PATH, or in ~/.local/bin, where
+# its tarball install (_tenv-install-tarball) puts it with its own terraform
+# proxy.
+_tf_tenv_present() {
+    command -v tenv &>/dev/null || [[ -x "${HOME}/.local/bin/tenv" ]]
+}
+
+# _tf_warn_version_managers — once per install-terraform. A user who already
+# manages terraform with tenv or tfenv is pointed back at it: a second
+# terraform means PATH order decides which one runs. The install carries on.
+# ~/.tfenv is the user's own; never touched.
+_tf_warn_version_managers() {
+    if _tf_tenv_present; then
+        log_warn "tenv is installed and manages terraform versions itself. Use it instead of installing terraform separately: tenv tf install latest && tenv tf use latest. With both, the terraform earlier on PATH runs."
+    fi
+    if [[ -e "${HOME}/.tfenv/bin/tfenv" ]]; then
+        log_warn "tfenv is installed (~/.tfenv). workbench no longer manages it, but you can keep using it for terraform instead: tfenv install latest && tfenv use latest. While ~/.tfenv/bin is on PATH, its terraform shim shadows this install. To switch, remove ~/.tfenv."
+    fi
 }
 
 # Fedora and RHEL-family hosts: HashiCorp's dnf repository, written as
@@ -247,6 +260,13 @@ _tf-install-mac() {
 _tf-install-zip() {
     local v="$1" os arch base sums zip tmp sha
     [[ "${v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { log_error "terraform: invalid version '${v}'"; return 1; }
+    # tenv's tarball install keeps its terraform proxy at this same path.
+    # Overwriting it would break tenv, so stop and leave terraform to tenv.
+    if [[ -x "${HOME}/.local/bin/tenv" && -e "${HOME}/.local/bin/terraform" ]]; then
+        log_error "terraform: ~/.local/bin/terraform is tenv's proxy — not overwriting it. Use tenv for terraform: tenv tf install ${v} && tenv tf use ${v}"
+        return 1
+    fi
+
     local tool
     for tool in gpg gpgv unzip; do
         command -v "${tool}" &>/dev/null \
@@ -312,7 +332,7 @@ _tf-install-zip() {
 # install-tflint is this same module's own installer (below).
 install-terraform() {
     local tf_version rc
-    _tf_warn_tfenv
+    _tf_warn_version_managers
     case "${WORKBENCH_OS}" in
         Mac)
             if command -v brew &>/dev/null; then
