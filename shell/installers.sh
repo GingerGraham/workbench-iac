@@ -91,65 +91,252 @@ installed-ansible() {
     command -v ansible &>/dev/null
 }
 
-# ── Terraform install ─────────────────────────────────────────────────────────
-_tf-install-linux() {
-    local tf_version="${1:-$(_iac_latest_terraform_version)}"
-    [[ -z "${tf_version}" ]] && { log_error "Could not determine Terraform version"; return 1; }
+# ── Terraform install (workbench-core D103) ──────────────────────────────────
+# terraform from HashiCorp's own signed packages: their dnf repository on
+# rhel-family hosts and their apt repository on debian-family hosts (both
+# with the package key pinned), the hashicorp/tap Homebrew tap on macOS, and
+# otherwise the release zip, whose SHA256SUMS is checked against the pinned
+# release key with gpgv. workbench no longer manages tfenv. tenv (below) is
+# the alternative for several terraform/tofu versions.
+#
+# _WB_TEST_SYSROOT prefixes every /etc path read or written here, the same
+# test hook workbench-core's vendor-key helpers use; it is never set outside
+# tests.
 
-    if command -v terraform &>/dev/null; then
-        local current
-        current="$(terraform version | sed -r 's/Terraform v([0-9.]+)/\1/' | head -1)"
-        [[ "${current}" == "${tf_version}" ]] && { log_info "Terraform ${tf_version} already installed"; return 0; }
-    fi
+# HashiCorp signing keys, verified 2026-10-26 against
+# https://www.hashicorp.com/trust/security. Public fingerprints, not secrets.
+_HASHICORP_PKG_KEY_FPR="D55C0D1AC78A8D8126CB631CFC9CA96ACA026560"      # gitleaks:allow
+_HASHICORP_RELEASE_KEY_FPR="C874011F0AB405110D02105534365D9472D7468F"  # gitleaks:allow
+_HASHICORP_RPM_KEY_URL="https://rpm.releases.hashicorp.com/gpg"
+_HASHICORP_APT_KEY_URL="https://apt.releases.hashicorp.com/gpg"
+_HASHICORP_RELEASE_KEY_URL="https://www.hashicorp.com/.well-known/pgp-key.txt"
 
-    if command -v tfenv &>/dev/null; then
-        git --git-dir="${HOME}/.tfenv/.git" pull && tfenv install "${tf_version}" && tfenv use "${tf_version}"
-        return $?
-    fi
-
-    log_info "Installing tfenv..."
-    git clone --depth=1 https://github.com/tfutils/tfenv.git "${HOME}/.tfenv" || { log_error "tfenv clone failed"; return 1; }
-    [[ ":${PATH}:" != *":${HOME}/.tfenv/bin:"* ]] && PATH="${HOME}/.tfenv/bin:${PATH}"
-    command -v tfenv &>/dev/null || { log_error "tfenv not found after install"; return 1; }
-    tfenv install latest && tfenv use latest
+# _tf_os_release_field <KEY>
+# Prints KEY's value from /etc/os-release, unquoted; non-zero when unset.
+_tf_os_release_field() {
+    local file="${_WB_TEST_SYSROOT:-}/etc/os-release" line val
+    [[ -r "${file}" ]] || return 1
+    line="$(grep -E "^$1=" "${file}" | head -1)"
+    val="${line#*=}"
+    val="${val#\"}"; val="${val%\"}"
+    val="${val#\'}"; val="${val%\'}"
+    [[ -n "${val}" ]] || return 1
+    printf '%s\n' "${val}"
 }
 
+# _tf_vendor_source_present <dir> <own-file-name> <ERE> <suffix> [<suffix> ...]
+# True when a <dir>/*<suffix> file the package manager reads, other than
+# workbench's own <own-file-name>, matches <ERE>: HashiCorp's own repository
+# is already configured.
+_tf_vendor_source_present() {
+    local dir="$1" own="$2" pattern="$3" suffix f
+    shift 3
+    [[ -d "${dir}" ]] || return 1
+    for suffix in "$@"; do
+        for f in "${dir}"/*"${suffix}"; do
+            [[ -f "${f}" && "${f##*/}" != "${own}" ]] || continue
+            grep -qE "${pattern}" "${f}" 2>/dev/null && return 0
+        done
+    done
+    return 1
+}
+
+# _tf_warn_tfenv — once per install-terraform, when a tfenv install exists.
+# ~/.tfenv is the user's own from here on; never touched.
+_tf_warn_tfenv() {
+    [[ -e "${HOME}/.tfenv/bin/tfenv" ]] || return 0
+    log_warn "workbench no longer manages tfenv. Its terraform shim shadows this install while ~/.tfenv/bin is on PATH. Remove ~/.tfenv, or keep using tfenv yourself."
+}
+
+# Fedora and RHEL-family hosts: HashiCorp's dnf repository, written as
+# workbench-hashicorp.repo with the package key pinned and stored locally and
+# only terraform allowed from it (_wb_dnf_vendor_repo). The id is not
+# HashiCorp's own "hashicorp": an existing hashicorp.repo is used as it is,
+# never overwritten or narrowed to terraform.
+_tf-install-rpm() {
+    local root="${_WB_TEST_SYSROOT:-}" pm family ec
+    if command -v dnf &>/dev/null; then pm="dnf"
+    elif command -v yum &>/dev/null; then pm="yum"
+    else log_error "terraform: neither dnf nor yum found"; return 1
+    fi
+    case "$(_tf_os_release_field ID)" in
+        fedora) family="fedora" ;;
+        *)      family="RHEL" ;;
+    esac
+    ec="$(get-elevation-command)" || return 1
+
+    if _tf_vendor_source_present "${root}/etc/yum.repos.d" "workbench-hashicorp.repo" \
+            '^\[hashicorp\]|rpm\.releases\.hashicorp\.com' .repo; then
+        log_info "terraform: HashiCorp's own ${pm} repository is already configured — using it"
+    else
+        log_info "terraform: adding HashiCorp's ${pm} repository (workbench-hashicorp, terraform only)"
+        _wb_dnf_vendor_repo --id workbench-hashicorp --name "HashiCorp Stable (workbench)" \
+            --baseurl "https://rpm.releases.hashicorp.com/${family}/\$releasever/\$basearch/stable" \
+            --key-url "${_HASHICORP_RPM_KEY_URL}" --fingerprint "${_HASHICORP_PKG_KEY_FPR}" \
+            --include terraform \
+            || { log_error "terraform: could not set up HashiCorp's repository with the pinned key ${_HASHICORP_PKG_KEY_FPR} — not installing"; return 1; }
+    fi
+
+    if rpm -q terraform &>/dev/null; then
+        ${ec} "${pm}" upgrade -y terraform
+    else
+        ${ec} "${pm}" install -y terraform
+    fi
+}
+
+# Debian/Ubuntu-family hosts: HashiCorp's apt repository, signed-by a keyring
+# holding only the pinned package key. An existing HashiCorp source list is
+# used as it is.
+_tf-install-deb() {
+    local root="${_WB_TEST_SYSROOT:-}" codename arch ec
+    local keyring="/usr/share/keyrings/workbench-hashicorp.gpg"
+    local list="/etc/apt/sources.list.d/workbench-hashicorp.list"
+    command -v apt-get &>/dev/null || { log_error "terraform: apt-get not found"; return 1; }
+    ec="$(get-elevation-command)" || return 1
+
+    if _tf_vendor_source_present "${root}/etc/apt/sources.list.d" "workbench-hashicorp.list" \
+            'apt\.releases\.hashicorp\.com' .list .sources; then
+        log_info "terraform: HashiCorp's own apt source is already configured — using it"
+    else
+        codename="$(_tf_os_release_field UBUNTU_CODENAME)" \
+            || codename="$(_tf_os_release_field VERSION_CODENAME)" \
+            || codename=""
+        case "${codename}" in
+            ''|*[!a-z0-9-]*) log_error "terraform: could not read the release codename from /etc/os-release"; return 1 ;;
+        esac
+        arch="$(dpkg --print-architecture 2>/dev/null)"
+        case "${arch}" in
+            ''|*[!a-z0-9-]*) log_error "terraform: could not determine the dpkg architecture"; return 1 ;;
+        esac
+        log_info "terraform: adding HashiCorp's apt repository (${codename}, ${arch})"
+        _wb_apt_keyring_pinned "${_HASHICORP_APT_KEY_URL}" "${keyring}" "${_HASHICORP_PKG_KEY_FPR}" \
+            || { log_error "terraform: could not install HashiCorp's apt key with the pinned fingerprint ${_HASHICORP_PKG_KEY_FPR} — not installing"; return 1; }
+        ${ec} install -d -m 0755 "${root}/etc/apt/sources.list.d" \
+            || { log_error "terraform: could not create /etc/apt/sources.list.d"; return 1; }
+        printf 'deb [arch=%s signed-by=%s] https://apt.releases.hashicorp.com %s main\n' \
+                "${arch}" "${keyring}" "${codename}" \
+            | ${ec} tee "${root}${list}" >/dev/null \
+            || { log_error "terraform: could not write ${list}"; return 1; }
+    fi
+
+    ${ec} apt-get update || { log_error "terraform: apt-get update failed"; return 1; }
+    ${ec} apt-get install -y terraform
+}
+
+# macOS with Homebrew: HashiCorp's tap. homebrew-core's terraform is frozen
+# at an old version.
 _tf-install-mac() {
-    local tf_version="${1:-$(_iac_latest_terraform_version)}"
-    if command -v brew &>/dev/null; then
-        if command -v tfenv &>/dev/null; then
-            brew upgrade tfenv
-        else
-            brew install tfenv
-        fi
-    elif command -v git &>/dev/null; then
-        git clone --depth=1 https://github.com/tfutils/tfenv.git "${HOME}/.tfenv"
-        [[ ":${PATH}:" != *":${HOME}/.tfenv/bin:"* ]] && PATH="${HOME}/.tfenv/bin:${PATH}"
+    brew tap hashicorp/tap || { log_error "terraform: brew tap hashicorp/tap failed"; return 1; }
+    if brew list hashicorp/tap/terraform &>/dev/null; then
+        brew upgrade hashicorp/tap/terraform
     else
-        log_error "Neither brew nor git found"; return 1
+        brew install hashicorp/tap/terraform
     fi
-    tfenv install latest && tfenv use latest
 }
 
-# install-tflint is this same module's own installer (below); install-trivy
-# is workbench-security's — a soft dependency, only called if that module is
-# also registered and its installer already loaded in this process.
-install-terraform() {
-    local tf_version
-    tf_version="$(_iac_latest_terraform_version)"
-    [[ -z "${tf_version}" ]] && { log_error "Could not determine Terraform version"; return 1; }
+# _tf-install-zip <version>
+# Everywhere else (openSUSE, Arch, unknown distros, macOS without brew): the
+# release zip into ~/.local/bin. Its SHA256SUMS must carry a good signature
+# from the pinned release key (gpgv), and the zip must match its line there.
+# Fails closed at every step; nothing is written to ~/.local/bin unless all
+# of them pass.
+_tf-install-zip() {
+    local v="$1" os arch base sums zip tmp sha
+    [[ "${v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { log_error "terraform: invalid version '${v}'"; return 1; }
+    local tool
+    for tool in gpg gpgv unzip; do
+        command -v "${tool}" &>/dev/null \
+            || { log_error "terraform: ${tool} is required to verify and unpack the release zip — install it and retry"; return 1; }
+    done
     case "${WORKBENCH_OS}" in
-        Linux) _tf-install-linux "${tf_version}" ;;
-        Mac)   _tf-install-mac "${tf_version}" ;;
-        *)     log_error "Unsupported OS"; return 1 ;;
-    esac || return 1
+        Linux) os="linux" ;;
+        Mac)   os="darwin" ;;
+        *) log_error "terraform: unsupported OS ${WORKBENCH_OS}"; return 1 ;;
+    esac
+    case "${WORKBENCH_ARCH}" in
+        x86_64|amd64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) log_error "terraform: unsupported architecture ${WORKBENCH_ARCH}"; return 1 ;;
+    esac
 
-    install-tflint
-    if command -v install-trivy &>/dev/null; then
-        install-trivy
-    else
-        log_info "install-trivy not available (workbench-security not installed?) — skipping trivy scan tooling"
+    if [[ -x "${HOME}/.local/bin/terraform" ]] \
+        && "${HOME}/.local/bin/terraform" version 2>/dev/null | head -1 | grep -qx "Terraform v${v}"; then
+        log_info "Terraform ${v} already installed in ~/.local/bin"
+        return 0
     fi
+
+    base="https://releases.hashicorp.com/terraform/${v}"
+    sums="terraform_${v}_SHA256SUMS"
+    zip="terraform_${v}_${os}_${arch}.zip"
+    tmp="$(mktemp -d)" || { log_error "terraform: could not create a temporary directory"; return 1; }
+
+    if ! _download_file_robust "${base}/${sums}" "${tmp}/${sums}" \
+        || ! _download_file_robust "${base}/${sums}.sig" "${tmp}/${sums}.sig" \
+        || ! _download_file_robust "${_HASHICORP_RELEASE_KEY_URL}" "${tmp}/release-key.asc"; then
+        log_error "terraform: could not download ${sums}, its signature or HashiCorp's release key"
+        rm -rf "${tmp}"; return 1
+    fi
+    _wb_key_extract_pinned "${tmp}/release-key.asc" "${tmp}/release-key.gpg" binary "${_HASHICORP_RELEASE_KEY_FPR}" \
+        || { log_error "terraform: the served release key is not ${_HASHICORP_RELEASE_KEY_FPR} — not installing"; rm -rf "${tmp}"; return 1; }
+    gpgv --keyring "${tmp}/release-key.gpg" "${tmp}/${sums}.sig" "${tmp}/${sums}" >/dev/null 2>&1 \
+        || { log_error "terraform: ${sums} has no good signature from HashiCorp's release key — not installing"; rm -rf "${tmp}"; return 1; }
+
+    sha="$(awk -v a="${zip}" '$2 == a || $2 == "*" a { print tolower($1); exit }' "${tmp}/${sums}")"
+    [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] \
+        || { log_error "terraform: ${sums} lists no SHA-256 for ${zip}"; rm -rf "${tmp}"; return 1; }
+    log_info "terraform: downloading ${zip} ..."
+    _wb_fetch_verified "${base}/${zip}" "${tmp}/terraform.zip" "${sha}" \
+        || { rm -rf "${tmp}"; return 1; }
+
+    if ! { mkdir -p "${tmp}/unpacked" \
+            && unzip -q -o "${tmp}/terraform.zip" terraform -d "${tmp}/unpacked" \
+            && [[ -f "${tmp}/unpacked/terraform" ]]; }; then
+        log_error "terraform: could not unpack terraform from ${zip}"
+        rm -rf "${tmp}"; return 1
+    fi
+    if ! { mkdir -p "${HOME}/.local/bin" \
+            && install -m 755 "${tmp}/unpacked/terraform" "${HOME}/.local/bin/terraform"; }; then
+        log_error "terraform: could not install ~/.local/bin/terraform"
+        rm -rf "${tmp}"; return 1
+    fi
+    rm -rf "${tmp}"
+    log_info "Terraform ${v} installed to ~/.local/bin/terraform"
+    [[ ":${PATH}:" == *":${HOME}/.local/bin:"* ]] \
+        || log_warn "terraform: ~/.local/bin is not on PATH — add it in ~/.config/workbench/local/settings.sh"
+}
+
+# install-tflint is this same module's own installer (below).
+install-terraform() {
+    local tf_version rc
+    _tf_warn_tfenv
+    case "${WORKBENCH_OS}" in
+        Mac)
+            if command -v brew &>/dev/null; then
+                _tf-install-mac
+            else
+                tf_version="$(_iac_latest_terraform_version)"
+                [[ -n "${tf_version}" ]] || { log_error "Could not determine the latest Terraform version"; return 1; }
+                _tf-install-zip "${tf_version}"
+            fi
+            ;;
+        Linux)
+            case "${WORKBENCH_DISTRO:-unknown}" in
+                rhel)   _tf-install-rpm ;;
+                debian) _tf-install-deb ;;
+                *)
+                    tf_version="$(_iac_latest_terraform_version)"
+                    [[ -n "${tf_version}" ]] || { log_error "Could not determine the latest Terraform version"; return 1; }
+                    _tf-install-zip "${tf_version}"
+                    ;;
+            esac
+            ;;
+        *) log_error "Unsupported OS"; return 1 ;;
+    esac
+    rc=$?
+    [[ ${rc} -eq 0 ]] || return "${rc}"
+
+    install-tflint || log_warn "terraform is installed, but installing tflint failed — run 'wb tools install tflint' to retry"
+    return 0
 }
 
 installed-terraform() {

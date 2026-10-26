@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shell/terraform.sh — workbench-iac
 # Terraform / OpenTofu / Terragrunt tool configuration. Registered at
-# tier: tools (.dotfiles-sync.yml), sourced unconditionally; individual
+# tier: tools (workbench.yml), sourced unconditionally; individual
 # alias blocks guard on `command -v`.
 # Ported from workbench-precursor's tools/terraform.sh, unchanged.
 
@@ -106,9 +106,16 @@ fi
 # and can't see that runtime guard, so without these it would list them
 # even on hosts missing the underlying tool. Declare their availability
 # predicates so the listing matches reality.
-_wb_declare_availability tofu otf otfi otfp otfpd otfa otfaa otfd otfr otfsh otfsl otfo otfv otffmt otfva otfws
+#
+# tofu and terragrunt come from tenv (wb tools install tenv); terraform from
+# install-terraform or tenv.
+_iac_tofu_present()       { command -v tofu &>/dev/null; }
+_iac_terragrunt_present() { command -v terragrunt &>/dev/null; }
+_wb_alias_availability --needs "tofu (OpenTofu)" --install tenv _iac_tofu_present \
+    otf otfi otfp otfpd otfa otfaa otfd otfr otfsh otfsl otfo otfv otffmt otfva otfws
 _wb_declare_availability terraform hctf hctfi hctfp hctfpd hctfa hctfaa hctfd hctfr hctfsh hctfsl hctfo hctfv hctffmt hctfva hctfws
-_wb_declare_availability terragrunt tg tgi tgp tgpd tga tgaa tgd tgr tgo tgv tgfmt tgva tgws
+_wb_alias_availability --needs "terragrunt" --install tenv _iac_terragrunt_present \
+    tg tgi tgp tgpd tga tgaa tgd tgr tgo tgv tgfmt tgva tgws
 
 # tf*/otf's short aliases above fall back between OpenTofu and Terraform
 # (OpenTofu preferred when both are installed — see the alias blocks
@@ -117,7 +124,8 @@ _wb_declare_availability terragrunt tg tgi tgp tgpd tga tgaa tgd tgr tgo tgv tgf
 _iac_tf_present() {
     command -v tofu &>/dev/null || command -v terraform &>/dev/null
 }
-_wb_alias_availability _iac_tf_present tf tfi tfp tfpd tfa tfaa tfd tfr tfsh tfsl tfo tfv tffmt tfva tfws
+_wb_alias_availability --needs "tofu or terraform" --install tenv _iac_tf_present \
+    tf tfi tfp tfpd tfa tfaa tfd tfr tfsh tfsl tfo tfv tffmt tfva tfws
 
 # ── functions ─────────────────────────────────────────────────────────────────
 get-latest-terraform-version() {

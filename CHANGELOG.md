@@ -20,9 +20,32 @@ All notable changes to `workbench-iac` are documented here.
   "Terraform/OpenTofu/Terragrunt/Ansible helpers — functions:" and
   "… — aliases:"; the names listed are the same, apart from
   `get-iac-functions` itself.
+- **`install-terraform` installs terraform from HashiCorp's signed packages
+  instead of tfenv** (workbench-core D103): HashiCorp's dnf repository on
+  Fedora/RHEL and its apt repository on Debian/Ubuntu (package key pinned,
+  repository limited to `terraform`), `hashicorp/tap` on macOS with
+  Homebrew, and elsewhere the release zip into `~/.local/bin`, installed
+  only after `gpgv` verifies its `SHA256SUMS` against HashiCorp's pinned
+  release key and the zip matches. An existing HashiCorp repository is used
+  as it is. tfenv was cloned from its default branch, checked terraform
+  against `SHA256SUMS` only, and its update path wrote into the current
+  directory (H7). An existing `~/.tfenv` is left alone, with a warning that
+  its shim shadows the new install while `~/.tfenv/bin` is on `PATH`.
+  tenv (`wb tools install tenv`) is the alternative for several versions.
+- `install-terraform` no longer tries `install-trivy`; under `wb tools` it
+  never ran.
+- The `tf*`, `otf*` and `tg*` listings say what they need ("tofu or
+  terraform", "tofu (OpenTofu)", "terragrunt") and point at
+  `wb tools install tenv`, instead of "module gave no reason".
 - README and messages say `wb tools install <name>` (and
   `wb tools install cosign`) instead of the removed `wb tools update` and
   `install-cosign`.
+
+### Fixed
+
+- **`ansible-vault-decrypt` / `ansible-vault-encrypt` honour `-p` on every
+  call.** `OPTIND` wasn't local, so a second call in the same bash shell
+  skipped `-p` and ignored the vault password file.
 
 ### Security
 

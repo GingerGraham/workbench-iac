@@ -25,11 +25,33 @@ wb add iac
 
 ## Soft dependency on workbench-security
 
-`install-terraform` calls `install-tflint` (this module) and, if present,
-`install-trivy` (`workbench-security`) for scan tooling. `install-tenv`
-recommends cosign (`wb tools install cosign`, from `workbench-security`) for
-release-signature verification. Neither is a hard `core_api:` dependency —
-both are guarded with `command -v` checks.
+`install-tenv` recommends cosign (`wb tools install cosign`, from
+`workbench-security`) for release-signature verification. It is not a hard
+`core_api:` dependency — the installer checks for cosign with `command -v`.
+`install-terraform` also installs `tflint` (this module).
+
+## What `install-terraform` verifies
+
+`wb tools install terraform` installs terraform from HashiCorp's own signed
+packages. workbench no longer installs or manages tfenv.
+
+| Host | Route | What is verified |
+|---|---|---|
+| Fedora, RHEL and rebuilds (`dnf`/`yum`) | HashiCorp's rpm repository, written as `/etc/yum.repos.d/workbench-hashicorp.repo` | The package key is pinned (`D55C 0D1A C78A 8D81 26CB 631C FC9C A96A CA02 6560`) and stored locally (`gpgkey=file://`), so dnf checks every package against it and never imports another key. The repository is limited to `terraform` (`includepkgs`). |
+| Debian, Ubuntu and derivatives (`apt`) | HashiCorp's apt repository, `/etc/apt/sources.list.d/workbench-hashicorp.list` | `signed-by=` a keyring holding only the pinned package key, so apt checks the repository's signed metadata against it. |
+| macOS with Homebrew | `brew install hashicorp/tap/terraform` | Homebrew checks the download against the SHA-256 in HashiCorp's tap formula. (homebrew-core's `terraform` is frozen at an old version.) |
+| openSUSE, Arch, other Linux, macOS without Homebrew | The release zip, into `~/.local/bin/terraform` | `terraform_<version>_SHA256SUMS` must carry a good signature (`gpgv`) from the pinned release key (`C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F`), and the zip must match its line there. Needs `gpg`, `gpgv` and `unzip`. Nothing is installed unless every step passes. |
+
+If HashiCorp's own repository is already configured (`hashicorp.repo`, or a
+source list for `apt.releases.hashicorp.com`), `install-terraform` uses it as
+it is and writes nothing of its own.
+
+**tenv is the alternative** (`wb tools install tenv`), for switching between
+terraform and OpenTofu versions. Installing both means two programs provide
+`terraform`; the one earlier on your `PATH` runs. If you still have tfenv
+in `~/.tfenv`, its shim shadows this install while `~/.tfenv/bin` is on
+`PATH`: remove `~/.tfenv`, or keep using tfenv yourself. workbench never
+touches it.
 
 ## What `install-tenv` verifies
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shell/ansible.sh — workbench-iac
 # Ansible tool configuration — aliases and vault helpers. Registered at
-# tier: tools (.dotfiles-sync.yml), sourced unconditionally; self-guards on
+# tier: tools (workbench.yml), sourced unconditionally; self-guards on
 # `command -v ansible`.
 # Ported from workbench-precursor's tools/ansible.sh, unchanged.
 
@@ -24,7 +24,9 @@ _wb_declare_availability ansible ansible-vault-decrypt ansible-vault-encrypt ap 
 # ── functions ─────────────────────────────────────────────────────────────────
 if command -v ansible &>/dev/null; then
     ansible-vault-decrypt() {
-        local VAULT_PASS="" FILES=()
+        # OPTIND is global: without resetting it, a second call in the same
+        # shell starts past -p and ignores the vault password file.
+        local VAULT_PASS="" FILES=() OPTIND=1 opt
 
         if ! command -v ansible &>/dev/null; then
             log_error "ansible is not installed"; return 1
@@ -66,7 +68,9 @@ if command -v ansible &>/dev/null; then
     }
 
     ansible-vault-encrypt() {
-        local VAULT_PASS="" FILES=()
+        # OPTIND is global: without resetting it, a second call in the same
+        # shell starts past -p and ignores the vault password file.
+        local VAULT_PASS="" FILES=() OPTIND=1 opt
 
         if ! command -v ansible &>/dev/null; then
             log_error "ansible is not installed"; return 1
