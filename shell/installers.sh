@@ -103,8 +103,12 @@ installed-ansible() {
 # test hook workbench-core's vendor-key helpers use; it is never set outside
 # tests.
 
-# HashiCorp signing keys, verified 2026-10-26 against
-# https://www.hashicorp.com/trust/security. Public fingerprints, not secrets.
+# HashiCorp signing keys, from the brief's table (taken from
+# https://www.hashicorp.com/trust/security). Checked 2026-10-26: the package
+# key is the key served at both _HASHICORP_RPM_KEY_URL and
+# _HASHICORP_APT_KEY_URL; the release key is in _HASHICORP_RELEASE_KEY_URL.
+# The trust/security page itself was not re-read then (HTTP 429). Public
+# fingerprints, not secrets.
 _HASHICORP_PKG_KEY_FPR="D55C0D1AC78A8D8126CB631CFC9CA96ACA026560"      # gitleaks:allow
 _HASHICORP_RELEASE_KEY_FPR="C874011F0AB405110D02105534365D9472D7468F"  # gitleaks:allow
 _HASHICORP_RPM_KEY_URL="https://rpm.releases.hashicorp.com/gpg"
