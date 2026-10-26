@@ -11,7 +11,7 @@
 # DOTFILES_OS/DOTFILES_DISTRO. _download_file_robust/_str_lower come from
 # workbench-core's Core API.
 #
-# This file is self-contained on purpose: `wb tools update` sources only the
+# This file is self-contained on purpose: `wb tools` sources only the
 # single register.installers[].src file named in the manifest — never a
 # module's register.shell[] files too (see bin/wb's _wb_tools_invoke in
 # workbench-core) — so install-terraform below carries its own private
@@ -159,10 +159,13 @@ installed-terraform() {
 # ── tenv install (OpenTofu / Terraform version manager) ───────────────────────
 # Upstream: https://github.com/tofuutils/tenv
 # Release artifacts are cosign-signed. We verify the checksums file and the asset
-# with cosign when it's present, then always confirm the SHA256. The rpm and
-# deb installs (dnf/yum/zypper/apt) additionally REQUIRE cosign verification
-# (_tenv_require_cosign_verified); the pacman and tarball fallbacks accept
-# SHA256-only unless TENV_INSTALL_REQUIRE_COSIGN=true.
+# with cosign when it's present, then always confirm the asset's own SHA256.
+# The rpm and deb installs (dnf/yum/zypper/apt) are installed as root, so they
+# go ahead only once cosign has verified them. Without cosign they fall back
+# to the release tarball in ~/.local/bin (_tenv_fallback_to_tarball): no root,
+# SHA256-only, with a warning. A cosign verification that fails stops the
+# install. The pacman and tarball paths accept SHA256-only. Setting
+# TENV_INSTALL_REQUIRE_COSIGN=true refuses anything cosign hasn't verified.
 
 # Extract a browser_download_url whose filename matches an extended regex.
 _tenv_asset_url() {
@@ -237,31 +240,44 @@ _tenv_fetch_and_verify() {
             log_warn "tenv: cosign present but signature assets missing for ${tag} — skipping cosign step"
         fi
     elif [[ "${TENV_INSTALL_REQUIRE_COSIGN:-false}" == "true" ]]; then
-        log_error "tenv: cosign required (TENV_INSTALL_REQUIRE_COSIGN=true) but not installed. Run install-cosign (workbench-security)."
+        log_error "tenv: cosign required (TENV_INSTALL_REQUIRE_COSIGN=true) but not installed. Run 'wb tools install cosign' (workbench-security)."
         return 1
     else
-        log_warn "tenv: cosign not installed — SHA256-only verification. Run install-cosign (workbench-security) for signature checks."
+        log_warn "tenv: cosign not installed — SHA256-only verification. Run 'wb tools install cosign' (workbench-security) for signature checks."
     fi
 
-    log_info "tenv: verifying SHA256 checksum ..."
-    ( cd "${tmp}" && sha256sum -c "$(basename "${sums_url}")" --ignore-missing ) \
-        || { log_error "tenv: SHA256 verification failed"; return 1; }
+    # The asset's own line only. `sha256sum -c --ignore-missing` passed when
+    # any listed file matched (security status N20).
+    log_info "tenv: verifying SHA256 checksum of ${asset} ..."
+    local expected actual
+    expected="$(awk -v a="${asset}" '$2 == a || $2 == "*" a { print tolower($1); exit }' \
+        "${tmp}/$(basename "${sums_url}")")"
+    actual="$(_wb_sha256 "${tmp}/${asset}")"
+    if [[ -z "${expected}" || "${expected}" != "${actual}" ]]; then
+        log_error "tenv: SHA256 verification of ${asset} failed"
+        return 1
+    fi
 
     _TENV_VERIFIED_ASSET="${tmp}/${asset}"
     return 0
 }
 
-# _tenv_require_cosign_verified <package-kind>
-# Fails closed unless _tenv_fetch_and_verify recorded a cosign verification of
-# the asset. A local package handed to dnf/yum/dpkg is not signature-checked by
-# the package manager (dnf: localpkg_gpgcheck defaults to 0; dpkg -i: never),
-# so without cosign the only protection is a same-release SHA-256, which
-# proves integrity but not origin (security review M3).
-_tenv_require_cosign_verified() {
-    if [[ "${_TENV_COSIGN_VERIFIED:-false}" != "true" ]]; then
-        log_error "tenv: refusing to install a downloaded $1 package without cosign verification. Run install-cosign (workbench-security) first, then retry."
+# _tenv_fallback_to_tarball <package-kind> <tag> <api-json>
+# Last resort when cosign couldn't verify a package that would be installed
+# as root (decision of 2026-10-24): install the release tarball into
+# ~/.local/bin instead — no root, SHA-256 checked, no signature. A cosign
+# verification that FAILED never reaches this: _tenv_fetch_and_verify
+# returns non-zero and the install stops.
+_tenv_fallback_to_tarball() {
+    local kind="$1" tag="$2" api_json="$3"
+    if [[ "${TENV_INSTALL_REQUIRE_COSIGN:-false}" == "true" ]]; then
+        log_error "tenv: TENV_INSTALL_REQUIRE_COSIGN=true and cosign could not verify the ${kind} package — not installing"
         return 1
     fi
+    log_warn "tenv: cosign is not available to verify the ${kind} package, so it won't be installed as root."
+    log_warn "tenv: installing the release tarball to ~/.local/bin instead (SHA-256 checked, not signature-verified)."
+    log_warn "tenv: for the signed ${kind}, install cosign (wb tools install cosign, or your package manager) and run 'wb tools install tenv' again."
+    _tenv-install-tarball "${tag}" "${api_json}"
 }
 
 _tenv-install-rpm() {
@@ -276,14 +292,19 @@ _tenv-install-rpm() {
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.rpm" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     # Every rpm path (dnf, yum, zypper) installs a local file that the package
-    # manager does not verify against a trusted key, so require cosign first.
-    _tenv_require_cosign_verified rpm || { rm -rf "${tmp}"; return 1; }
+    # manager does not verify against a trusted key, so only a cosign-verified
+    # one is installed as root; otherwise fall back to the tarball.
+    if [[ "${_TENV_COSIGN_VERIFIED}" != "true" ]]; then
+        rm -rf "${tmp}"
+        _tenv_fallback_to_tarball rpm "${tag}" "${api_json}"
+        return $?
+    fi
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     if command -v dnf &>/dev/null; then
         # dnf does not check the signature of a LOCAL rpm unless
-        # localpkg_gpgcheck=1 (default 0), which is why cosign verification is
-        # required above. No tenv RPM signing key is pinned, so there is
+        # localpkg_gpgcheck=1 (default 0), which is why only a cosign-verified
+        # rpm gets here. No tenv RPM signing key is pinned, so there is
         # nothing to `rpm -K` against; see README.md "What install-tenv
         # verifies".
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
@@ -308,8 +329,13 @@ _tenv-install-deb() {
         || { log_error "tenv: could not create a temporary directory"; return 1; }
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.deb" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
-    # dpkg -i does no signature check of a local .deb, so require cosign.
-    _tenv_require_cosign_verified deb || { rm -rf "${tmp}"; return 1; }
+    # dpkg -i does no signature check of a local .deb, so only a
+    # cosign-verified one is installed; otherwise fall back to the tarball.
+    if [[ "${_TENV_COSIGN_VERIFIED}" != "true" ]]; then
+        rm -rf "${tmp}"
+        _tenv_fallback_to_tarball deb "${tag}" "${api_json}"
+        return $?
+    fi
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     ${ec} dpkg -i "${_TENV_VERIFIED_ASSET}" || ${ec} apt-get install -f -y
@@ -328,13 +354,20 @@ _tenv-install-arch() {
     local rc=$?; rm -rf "${tmp}"; return $rc
 }
 
-# Generic fallback: extract binaries to ~/.local/bin (root-free). Matches loosely
-# on _Linux_*.tar.gz to stay robust to the goreleaser arch token (x86_64 vs amd64).
+# Generic fallback, and the rpm/deb paths' last resort without cosign: extract
+# binaries to ~/.local/bin (root-free). The tarballs use goreleaser's
+# x86_64/arm64 arch tokens, unlike the packages' amd64/arm64.
 _tenv-install-tarball() {
     local tag="$1" api_json="$2"
     local tmp; tmp="$(mktemp -d)" \
         || { log_error "tenv: could not create a temporary directory"; return 1; }
-    _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_Linux_.*\.tar\.gz" "${api_json}" \
+    local tar_arch
+    case "${WORKBENCH_ARCH}" in
+        x86_64|amd64)  tar_arch="x86_64" ;;
+        aarch64|arm64) tar_arch="arm64" ;;
+        *) log_error "tenv: unsupported architecture ${WORKBENCH_ARCH}"; rm -rf "${tmp}"; return 1 ;;
+    esac
+    _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_Linux_${tar_arch}\.tar\.gz" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: extracting to ~/.local/bin ..."
     mkdir -p "${HOME}/.local/bin"
@@ -388,7 +421,7 @@ install-tenv() {
         log_info "tenv installed: $(tenv version 2>/dev/null | head -1)"
         log_info "Set TENV_AUTO_INSTALL=true in ~/.config/workbench/local/settings.sh if you want tofu/terraform versions to install on first use."
         command -v cosign &>/dev/null \
-            || log_warn "cosign not present: tenv falls back to PGP/SHA for tofu & terraform checks. Run install-cosign (workbench-security) for full cosign verification."
+            || log_warn "cosign not present: tenv falls back to PGP/SHA for tofu & terraform checks. Run 'wb tools install cosign' (workbench-security) for full cosign verification."
     fi
     return $rc
 }

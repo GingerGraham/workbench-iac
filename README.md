@@ -20,29 +20,28 @@ wb add iac
   `vault_password_file` when present) and `ap`/`avd`/`ave` aliases.
 - Terraform/OpenTofu shell completions.
 - `install-terraform`, `install-tenv`, `install-tflint`, `install-ansible` —
-  via `wb tools update`.
+  run with `wb tools install <name>` (for example `wb tools install tenv`),
+  or `wb tools upgrade <name>` to update one already installed.
 
 ## Soft dependency on workbench-security
 
 `install-terraform` calls `install-tflint` (this module) and, if present,
 `install-trivy` (`workbench-security`) for scan tooling. `install-tenv`
-recommends `install-cosign` (`workbench-security`) for full release-signature
-verification, falling back to SHA256-only checksums without it. Neither is a
-hard `core_api:` dependency — both are guarded with `command -v` checks.
+recommends cosign (`wb tools install cosign`, from `workbench-security`) for
+release-signature verification. Neither is a hard `core_api:` dependency —
+both are guarded with `command -v` checks.
 
 ## What `install-tenv` verifies
 
-Release assets are always checked against the release's `*_checksums.txt`.
-With `install-cosign` present and the release carrying signature assets, the
-checksums file and the asset are also verified with cosign (keyless, pinned
-to tenv's release identity). Set `TENV_INSTALL_REQUIRE_COSIGN=true` to make
-missing cosign or missing signature assets a hard error on every distro.
+Release assets are always checked against their own line in the release's
+`*_checksums.txt`. With cosign present and the release carrying signature
+assets, the checksums file and the asset are also verified with cosign
+(keyless, pinned to tenv's release identity). A cosign verification that
+fails always stops the install.
 
-**Cosign is required for the package-based installs.** A local package handed
-to the package manager is not signature-checked against a trusted key, so
-`install-tenv` refuses to install a downloaded `.rpm` (`dnf`, `yum`, `zypper`)
-or `.deb` (`apt`/`dpkg`) unless cosign verified it, and tells you to run
-`install-cosign` (`workbench-security`) first. The reasons, per path:
+**Packages are installed as root only once cosign has verified them.** A
+local package handed to the package manager is not signature-checked
+against a trusted key:
 
 | Path | Package-manager signature check of a local file |
 |---|---|
@@ -50,13 +49,24 @@ or `.deb` (`apt`/`dpkg`) unless cosign verified it, and tells you to run
 | openSUSE (`zypper`) `.rpm` | Rejects an unsigned or untrusted local RPM, so `--allow-unsigned-rpm` is needed after cosign verification |
 | Debian/Ubuntu (`apt`/`dpkg`) `.deb` | None for a local file |
 
-The Arch (`pacman -U`) and generic tarball fallbacks are not gated; they are
-verified by the checksums file, plus cosign when it is installed.
+So without cosign, `install-tenv` on those distros does not install the
+`.rpm`/`.deb`. It installs the release tarball into `~/.local/bin` instead —
+no root, SHA-256 checked, not signature-verified — and warns, saying to run
+`wb tools install cosign` and then `wb tools install tenv` again for the
+signed package. `~/.local/bin` needs to be on your `PATH`.
+
+Set `TENV_INSTALL_REQUIRE_COSIGN=true` to refuse anything cosign hasn't
+verified, on every distro: no tarball fallback, and missing cosign or
+missing signature assets is an error.
+
+The Arch (`pacman -U`) and generic tarball paths are verified by the
+checksums file, plus cosign when it is installed. The tarball is the one
+for this machine's architecture (`x86_64` or `arm64`).
 
 No tenv package-signing key is pinned by this module, so there is no
 `rpm -K`/`--checksig` step.
 
 ## Requires
 
-Nothing at install time — each tool is installed via its own
-`install-<name>` function (`wb tools update`).
+Nothing at install time — each tool is installed on demand with
+`wb tools install <name>`.
