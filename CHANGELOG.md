@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-27
+
 ### Changed
 
 - **`install-tenv` on Fedora/RHEL, openSUSE and Debian/Ubuntu without
