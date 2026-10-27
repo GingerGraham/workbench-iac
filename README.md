@@ -20,29 +20,53 @@ wb add iac
   `vault_password_file` when present) and `ap`/`avd`/`ave` aliases.
 - Terraform/OpenTofu shell completions.
 - `install-terraform`, `install-tenv`, `install-tflint`, `install-ansible` —
-  via `wb tools update`.
+  run with `wb tools install <name>` (for example `wb tools install tenv`),
+  or `wb tools upgrade <name>` to update one already installed.
 
 ## Soft dependency on workbench-security
 
-`install-terraform` calls `install-tflint` (this module) and, if present,
-`install-trivy` (`workbench-security`) for scan tooling. `install-tenv`
-recommends `install-cosign` (`workbench-security`) for full release-signature
-verification, falling back to SHA256-only checksums without it. Neither is a
-hard `core_api:` dependency — both are guarded with `command -v` checks.
+`install-tenv` recommends cosign (`wb tools install cosign`, from
+`workbench-security`) for release-signature verification. It is not a hard
+`core_api:` dependency — the installer checks for cosign with `command -v`.
+`install-terraform` also installs `tflint` (this module).
+
+## What `install-terraform` verifies
+
+`wb tools install terraform` installs terraform from HashiCorp's own signed
+packages. workbench no longer installs or manages tfenv.
+
+| Host | Route | What is verified |
+|---|---|---|
+| Fedora, RHEL and rebuilds (`dnf`/`yum`) | HashiCorp's rpm repository, written as `/etc/yum.repos.d/workbench-hashicorp.repo` | The package key is pinned (`D55C 0D1A C78A 8D81 26CB 631C FC9C A96A CA02 6560`) and stored locally (`gpgkey=file://`), so dnf checks every package against it and never imports another key. The repository is limited to `terraform` (`includepkgs`). |
+| Debian, Ubuntu and derivatives (`apt`) | HashiCorp's apt repository, `/etc/apt/sources.list.d/workbench-hashicorp.list` | `signed-by=` a keyring holding only the pinned package key, so apt checks the repository's signed metadata against it. |
+| macOS with Homebrew | `brew install hashicorp/tap/terraform` | Homebrew checks the download against the SHA-256 in HashiCorp's tap formula. (homebrew-core's `terraform` is frozen at an old version.) |
+| openSUSE, Arch, other Linux, macOS without Homebrew | The release zip, into `~/.local/bin/terraform` | `terraform_<version>_SHA256SUMS` must carry a good signature (`gpgv`) from the pinned release key (`C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F`), and the zip must match its line there. Needs `gpg`, `gpgv` and `unzip`. Nothing is installed unless every step passes. |
+
+If HashiCorp's own repository is already configured (`hashicorp.repo`, or a
+source list for `apt.releases.hashicorp.com`), `install-terraform` uses it as
+it is and writes nothing of its own.
+
+**tenv is the alternative** (`wb tools install tenv`), for switching between
+terraform and OpenTofu versions. If tenv is already installed,
+`install-terraform` warns and points you at `tenv tf install` instead:
+installing both means two programs provide `terraform`, and the one earlier
+on your `PATH` runs. On the release-zip route it stops rather than overwrite
+tenv's own `terraform` proxy in `~/.local/bin`. If you still have tfenv in
+`~/.tfenv`, it warns the same way and points you at `tfenv install`: its
+shim shadows this install while `~/.tfenv/bin` is on `PATH`. Remove
+`~/.tfenv` to switch. workbench never touches it.
 
 ## What `install-tenv` verifies
 
-Release assets are always checked against the release's `*_checksums.txt`.
-With `install-cosign` present and the release carrying signature assets, the
-checksums file and the asset are also verified with cosign (keyless, pinned
-to tenv's release identity). Set `TENV_INSTALL_REQUIRE_COSIGN=true` to make
-missing cosign or missing signature assets a hard error on every distro.
+Release assets are always checked against their own line in the release's
+`*_checksums.txt`. With cosign present and the release carrying signature
+assets, the checksums file and the asset are also verified with cosign
+(keyless, pinned to tenv's release identity). A cosign verification that
+fails always stops the install.
 
-**Cosign is required for the package-based installs.** A local package handed
-to the package manager is not signature-checked against a trusted key, so
-`install-tenv` refuses to install a downloaded `.rpm` (`dnf`, `yum`, `zypper`)
-or `.deb` (`apt`/`dpkg`) unless cosign verified it, and tells you to run
-`install-cosign` (`workbench-security`) first. The reasons, per path:
+**Packages are installed as root only once cosign has verified them.** A
+local package handed to the package manager is not signature-checked
+against a trusted key:
 
 | Path | Package-manager signature check of a local file |
 |---|---|
@@ -50,13 +74,24 @@ or `.deb` (`apt`/`dpkg`) unless cosign verified it, and tells you to run
 | openSUSE (`zypper`) `.rpm` | Rejects an unsigned or untrusted local RPM, so `--allow-unsigned-rpm` is needed after cosign verification |
 | Debian/Ubuntu (`apt`/`dpkg`) `.deb` | None for a local file |
 
-The Arch (`pacman -U`) and generic tarball fallbacks are not gated; they are
-verified by the checksums file, plus cosign when it is installed.
+So without cosign, `install-tenv` on those distros does not install the
+`.rpm`/`.deb`. It installs the release tarball into `~/.local/bin` instead —
+no root, SHA-256 checked, not signature-verified — and warns, saying to run
+`wb tools install cosign` and then `wb tools install tenv` again for the
+signed package. `~/.local/bin` needs to be on your `PATH`.
+
+Set `TENV_INSTALL_REQUIRE_COSIGN=true` to refuse anything cosign hasn't
+verified, on every distro: no tarball fallback, and missing cosign or
+missing signature assets is an error.
+
+The Arch (`pacman -U`) and generic tarball paths are verified by the
+checksums file, plus cosign when it is installed. The tarball is the one
+for this machine's architecture (`x86_64` or `arm64`).
 
 No tenv package-signing key is pinned by this module, so there is no
 `rpm -K`/`--checksig` step.
 
 ## Requires
 
-Nothing at install time — each tool is installed via its own
-`install-<name>` function (`wb tools update`).
+Nothing at install time — each tool is installed on demand with
+`wb tools install <name>`.

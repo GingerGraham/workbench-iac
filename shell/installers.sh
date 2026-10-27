@@ -11,7 +11,7 @@
 # DOTFILES_OS/DOTFILES_DISTRO. _download_file_robust/_str_lower come from
 # workbench-core's Core API.
 #
-# This file is self-contained on purpose: `wb tools update` sources only the
+# This file is self-contained on purpose: `wb tools` sources only the
 # single register.installers[].src file named in the manifest — never a
 # module's register.shell[] files too (see bin/wb's _wb_tools_invoke in
 # workbench-core) — so install-terraform below carries its own private
@@ -91,65 +91,276 @@ installed-ansible() {
     command -v ansible &>/dev/null
 }
 
-# ── Terraform install ─────────────────────────────────────────────────────────
-_tf-install-linux() {
-    local tf_version="${1:-$(_iac_latest_terraform_version)}"
-    [[ -z "${tf_version}" ]] && { log_error "Could not determine Terraform version"; return 1; }
+# ── Terraform install (workbench-core D103) ──────────────────────────────────
+# terraform from HashiCorp's own signed packages: their dnf repository on
+# rhel-family hosts and their apt repository on debian-family hosts (both
+# with the package key pinned), the hashicorp/tap Homebrew tap on macOS, and
+# otherwise the release zip, whose SHA256SUMS is checked against the pinned
+# release key with gpgv. workbench no longer manages tfenv. tenv (below) is
+# the alternative for several terraform/tofu versions.
+#
+# _WB_TEST_SYSROOT prefixes every /etc path read or written here, the same
+# test hook workbench-core's vendor-key helpers use; it is never set outside
+# tests.
 
-    if command -v terraform &>/dev/null; then
-        local current
-        current="$(terraform version | sed -r 's/Terraform v([0-9.]+)/\1/' | head -1)"
-        [[ "${current}" == "${tf_version}" ]] && { log_info "Terraform ${tf_version} already installed"; return 0; }
-    fi
+# HashiCorp signing keys, from the brief's table (taken from
+# https://www.hashicorp.com/trust/security). Checked 2026-10-26: the package
+# key is the key served at both _HASHICORP_RPM_KEY_URL and
+# _HASHICORP_APT_KEY_URL; the release key is in _HASHICORP_RELEASE_KEY_URL.
+# The trust/security page itself was not re-read then (HTTP 429). Public
+# fingerprints, not secrets.
+_HASHICORP_PKG_KEY_FPR="D55C0D1AC78A8D8126CB631CFC9CA96ACA026560"      # gitleaks:allow
+_HASHICORP_RELEASE_KEY_FPR="C874011F0AB405110D02105534365D9472D7468F"  # gitleaks:allow
+_HASHICORP_RPM_KEY_URL="https://rpm.releases.hashicorp.com/gpg"
+_HASHICORP_APT_KEY_URL="https://apt.releases.hashicorp.com/gpg"
+_HASHICORP_RELEASE_KEY_URL="https://www.hashicorp.com/.well-known/pgp-key.txt"
 
-    if command -v tfenv &>/dev/null; then
-        git --git-dir="${HOME}/.tfenv/.git" pull && tfenv install "${tf_version}" && tfenv use "${tf_version}"
-        return $?
-    fi
-
-    log_info "Installing tfenv..."
-    git clone --depth=1 https://github.com/tfutils/tfenv.git "${HOME}/.tfenv" || { log_error "tfenv clone failed"; return 1; }
-    [[ ":${PATH}:" != *":${HOME}/.tfenv/bin:"* ]] && PATH="${HOME}/.tfenv/bin:${PATH}"
-    command -v tfenv &>/dev/null || { log_error "tfenv not found after install"; return 1; }
-    tfenv install latest && tfenv use latest
+# _tf_os_release_field <KEY>
+# Prints KEY's value from /etc/os-release, unquoted; non-zero when unset.
+_tf_os_release_field() {
+    local file="${_WB_TEST_SYSROOT:-}/etc/os-release" line val
+    [[ -r "${file}" ]] || return 1
+    line="$(grep -E "^$1=" "${file}" | head -1)"
+    val="${line#*=}"
+    val="${val#\"}"; val="${val%\"}"
+    val="${val#\'}"; val="${val%\'}"
+    [[ -n "${val}" ]] || return 1
+    printf '%s\n' "${val}"
 }
 
+# _tf_vendor_source_present <dir> <own-file-name> <ERE> <suffix> [<suffix> ...]
+# True when a <dir>/*<suffix> file the package manager reads, other than
+# workbench's own <own-file-name>, matches <ERE>: HashiCorp's own repository
+# is already configured.
+_tf_vendor_source_present() {
+    local dir="$1" own="$2" pattern="$3" suffix f
+    shift 3
+    [[ -d "${dir}" ]] || return 1
+    for suffix in "$@"; do
+        for f in "${dir}"/*"${suffix}"; do
+            [[ -f "${f}" && "${f##*/}" != "${own}" ]] || continue
+            grep -qE "${pattern}" "${f}" 2>/dev/null && return 0
+        done
+    done
+    return 1
+}
+
+# _tf_tenv_present — tenv is installed: on PATH, or in ~/.local/bin, where
+# its tarball install (_tenv-install-tarball) puts it with its own terraform
+# proxy.
+_tf_tenv_present() {
+    command -v tenv &>/dev/null || [[ -x "${HOME}/.local/bin/tenv" ]]
+}
+
+# _tf_warn_version_managers — once per install-terraform. A user who already
+# manages terraform with tenv or tfenv is pointed back at it: a second
+# terraform means PATH order decides which one runs. The install carries on.
+# ~/.tfenv is the user's own; never touched.
+_tf_warn_version_managers() {
+    if _tf_tenv_present; then
+        log_warn "tenv is installed and manages terraform versions itself. Use it instead of installing terraform separately: tenv tf install latest && tenv tf use latest. With both, the terraform earlier on PATH runs."
+    fi
+    if [[ -e "${HOME}/.tfenv/bin/tfenv" ]]; then
+        log_warn "tfenv is installed (~/.tfenv). workbench no longer manages it, but you can keep using it for terraform instead: tfenv install latest && tfenv use latest. While ~/.tfenv/bin is on PATH, its terraform shim shadows this install. To switch, remove ~/.tfenv."
+    fi
+}
+
+# Fedora and RHEL-family hosts: HashiCorp's dnf repository, written as
+# workbench-hashicorp.repo with the package key pinned and stored locally and
+# only terraform allowed from it (_wb_dnf_vendor_repo). The id is not
+# HashiCorp's own "hashicorp": an existing hashicorp.repo is used as it is,
+# never overwritten or narrowed to terraform.
+_tf-install-rpm() {
+    local root="${_WB_TEST_SYSROOT:-}" pm family ec
+    if command -v dnf &>/dev/null; then pm="dnf"
+    elif command -v yum &>/dev/null; then pm="yum"
+    else log_error "terraform: neither dnf nor yum found"; return 1
+    fi
+    case "$(_tf_os_release_field ID)" in
+        fedora) family="fedora" ;;
+        *)      family="RHEL" ;;
+    esac
+    ec="$(get-elevation-command)" || return 1
+
+    if _tf_vendor_source_present "${root}/etc/yum.repos.d" "workbench-hashicorp.repo" \
+            '^\[hashicorp\]|rpm\.releases\.hashicorp\.com' .repo; then
+        log_info "terraform: HashiCorp's own ${pm} repository is already configured — using it"
+    else
+        log_info "terraform: adding HashiCorp's ${pm} repository (workbench-hashicorp, terraform only)"
+        _wb_dnf_vendor_repo --id workbench-hashicorp --name "HashiCorp Stable (workbench)" \
+            --baseurl "https://rpm.releases.hashicorp.com/${family}/\$releasever/\$basearch/stable" \
+            --key-url "${_HASHICORP_RPM_KEY_URL}" --fingerprint "${_HASHICORP_PKG_KEY_FPR}" \
+            --include terraform \
+            || { log_error "terraform: could not set up HashiCorp's repository with the pinned key ${_HASHICORP_PKG_KEY_FPR} — not installing"; return 1; }
+    fi
+
+    if rpm -q terraform &>/dev/null; then
+        ${ec} "${pm}" upgrade -y terraform
+    else
+        ${ec} "${pm}" install -y terraform
+    fi
+}
+
+# Debian/Ubuntu-family hosts: HashiCorp's apt repository, signed-by a keyring
+# holding only the pinned package key. An existing HashiCorp source list is
+# used as it is.
+_tf-install-deb() {
+    local root="${_WB_TEST_SYSROOT:-}" codename arch ec
+    local keyring="/usr/share/keyrings/workbench-hashicorp.gpg"
+    local list="/etc/apt/sources.list.d/workbench-hashicorp.list"
+    command -v apt-get &>/dev/null || { log_error "terraform: apt-get not found"; return 1; }
+    ec="$(get-elevation-command)" || return 1
+
+    if _tf_vendor_source_present "${root}/etc/apt/sources.list.d" "workbench-hashicorp.list" \
+            'apt\.releases\.hashicorp\.com' .list .sources; then
+        log_info "terraform: HashiCorp's own apt source is already configured — using it"
+    else
+        codename="$(_tf_os_release_field UBUNTU_CODENAME)" \
+            || codename="$(_tf_os_release_field VERSION_CODENAME)" \
+            || codename=""
+        case "${codename}" in
+            ''|*[!a-z0-9-]*) log_error "terraform: could not read the release codename from /etc/os-release"; return 1 ;;
+        esac
+        arch="$(dpkg --print-architecture 2>/dev/null)"
+        case "${arch}" in
+            ''|*[!a-z0-9-]*) log_error "terraform: could not determine the dpkg architecture"; return 1 ;;
+        esac
+        log_info "terraform: adding HashiCorp's apt repository (${codename}, ${arch})"
+        _wb_apt_keyring_pinned "${_HASHICORP_APT_KEY_URL}" "${keyring}" "${_HASHICORP_PKG_KEY_FPR}" \
+            || { log_error "terraform: could not install HashiCorp's apt key with the pinned fingerprint ${_HASHICORP_PKG_KEY_FPR} — not installing"; return 1; }
+        ${ec} install -d -m 0755 "${root}/etc/apt/sources.list.d" \
+            || { log_error "terraform: could not create /etc/apt/sources.list.d"; return 1; }
+        printf 'deb [arch=%s signed-by=%s] https://apt.releases.hashicorp.com %s main\n' \
+                "${arch}" "${keyring}" "${codename}" \
+            | ${ec} tee "${root}${list}" >/dev/null \
+            || { log_error "terraform: could not write ${list}"; return 1; }
+    fi
+
+    ${ec} apt-get update || { log_error "terraform: apt-get update failed"; return 1; }
+    ${ec} apt-get install -y terraform
+}
+
+# macOS with Homebrew: HashiCorp's tap. homebrew-core's terraform is frozen
+# at an old version.
 _tf-install-mac() {
-    local tf_version="${1:-$(_iac_latest_terraform_version)}"
-    if command -v brew &>/dev/null; then
-        if command -v tfenv &>/dev/null; then
-            brew upgrade tfenv
-        else
-            brew install tfenv
-        fi
-    elif command -v git &>/dev/null; then
-        git clone --depth=1 https://github.com/tfutils/tfenv.git "${HOME}/.tfenv"
-        [[ ":${PATH}:" != *":${HOME}/.tfenv/bin:"* ]] && PATH="${HOME}/.tfenv/bin:${PATH}"
+    brew tap hashicorp/tap || { log_error "terraform: brew tap hashicorp/tap failed"; return 1; }
+    if brew list hashicorp/tap/terraform &>/dev/null; then
+        brew upgrade hashicorp/tap/terraform
     else
-        log_error "Neither brew nor git found"; return 1
+        brew install hashicorp/tap/terraform
     fi
-    tfenv install latest && tfenv use latest
 }
 
-# install-tflint is this same module's own installer (below); install-trivy
-# is workbench-security's — a soft dependency, only called if that module is
-# also registered and its installer already loaded in this process.
-install-terraform() {
-    local tf_version
-    tf_version="$(_iac_latest_terraform_version)"
-    [[ -z "${tf_version}" ]] && { log_error "Could not determine Terraform version"; return 1; }
-    case "${WORKBENCH_OS}" in
-        Linux) _tf-install-linux "${tf_version}" ;;
-        Mac)   _tf-install-mac "${tf_version}" ;;
-        *)     log_error "Unsupported OS"; return 1 ;;
-    esac || return 1
-
-    install-tflint
-    if command -v install-trivy &>/dev/null; then
-        install-trivy
-    else
-        log_info "install-trivy not available (workbench-security not installed?) — skipping trivy scan tooling"
+# _tf-install-zip <version>
+# Everywhere else (openSUSE, Arch, unknown distros, macOS without brew): the
+# release zip into ~/.local/bin. Its SHA256SUMS must carry a good signature
+# from the pinned release key (gpgv), and the zip must match its line there.
+# Fails closed at every step; nothing is written to ~/.local/bin unless all
+# of them pass.
+_tf-install-zip() {
+    local v="$1" os arch base sums zip tmp sha
+    [[ "${v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { log_error "terraform: invalid version '${v}'"; return 1; }
+    # tenv's tarball install keeps its terraform proxy at this same path.
+    # Overwriting it would break tenv, so stop and leave terraform to tenv.
+    if [[ -x "${HOME}/.local/bin/tenv" && -e "${HOME}/.local/bin/terraform" ]]; then
+        log_error "terraform: ~/.local/bin/terraform is tenv's proxy — not overwriting it. Use tenv for terraform: tenv tf install ${v} && tenv tf use ${v}"
+        return 1
     fi
+
+    local tool
+    for tool in gpg gpgv unzip; do
+        command -v "${tool}" &>/dev/null \
+            || { log_error "terraform: ${tool} is required to verify and unpack the release zip — install it and retry"; return 1; }
+    done
+    case "${WORKBENCH_OS}" in
+        Linux) os="linux" ;;
+        Mac)   os="darwin" ;;
+        *) log_error "terraform: unsupported OS ${WORKBENCH_OS}"; return 1 ;;
+    esac
+    case "${WORKBENCH_ARCH}" in
+        x86_64|amd64)  arch="amd64" ;;
+        aarch64|arm64) arch="arm64" ;;
+        *) log_error "terraform: unsupported architecture ${WORKBENCH_ARCH}"; return 1 ;;
+    esac
+
+    if [[ -x "${HOME}/.local/bin/terraform" ]] \
+        && "${HOME}/.local/bin/terraform" version 2>/dev/null | head -1 | grep -qx "Terraform v${v}"; then
+        log_info "Terraform ${v} already installed in ~/.local/bin"
+        return 0
+    fi
+
+    base="https://releases.hashicorp.com/terraform/${v}"
+    sums="terraform_${v}_SHA256SUMS"
+    zip="terraform_${v}_${os}_${arch}.zip"
+    tmp="$(mktemp -d)" || { log_error "terraform: could not create a temporary directory"; return 1; }
+
+    if ! _download_file_robust "${base}/${sums}" "${tmp}/${sums}" \
+        || ! _download_file_robust "${base}/${sums}.sig" "${tmp}/${sums}.sig" \
+        || ! _download_file_robust "${_HASHICORP_RELEASE_KEY_URL}" "${tmp}/release-key.asc"; then
+        log_error "terraform: could not download ${sums}, its signature or HashiCorp's release key"
+        rm -rf "${tmp}"; return 1
+    fi
+    _wb_key_extract_pinned "${tmp}/release-key.asc" "${tmp}/release-key.gpg" binary "${_HASHICORP_RELEASE_KEY_FPR}" \
+        || { log_error "terraform: the served release key is not ${_HASHICORP_RELEASE_KEY_FPR} — not installing"; rm -rf "${tmp}"; return 1; }
+    gpgv --keyring "${tmp}/release-key.gpg" "${tmp}/${sums}.sig" "${tmp}/${sums}" >/dev/null 2>&1 \
+        || { log_error "terraform: ${sums} has no good signature from HashiCorp's release key — not installing"; rm -rf "${tmp}"; return 1; }
+
+    sha="$(awk -v a="${zip}" '$2 == a || $2 == "*" a { print tolower($1); exit }' "${tmp}/${sums}")"
+    [[ "${sha}" =~ ^[0-9a-f]{64}$ ]] \
+        || { log_error "terraform: ${sums} lists no SHA-256 for ${zip}"; rm -rf "${tmp}"; return 1; }
+    log_info "terraform: downloading ${zip} ..."
+    _wb_fetch_verified "${base}/${zip}" "${tmp}/terraform.zip" "${sha}" \
+        || { rm -rf "${tmp}"; return 1; }
+
+    if ! { mkdir -p "${tmp}/unpacked" \
+            && unzip -q -o "${tmp}/terraform.zip" terraform -d "${tmp}/unpacked" \
+            && [[ -f "${tmp}/unpacked/terraform" ]]; }; then
+        log_error "terraform: could not unpack terraform from ${zip}"
+        rm -rf "${tmp}"; return 1
+    fi
+    if ! { mkdir -p "${HOME}/.local/bin" \
+            && install -m 755 "${tmp}/unpacked/terraform" "${HOME}/.local/bin/terraform"; }; then
+        log_error "terraform: could not install ~/.local/bin/terraform"
+        rm -rf "${tmp}"; return 1
+    fi
+    rm -rf "${tmp}"
+    log_info "Terraform ${v} installed to ~/.local/bin/terraform"
+    [[ ":${PATH}:" == *":${HOME}/.local/bin:"* ]] \
+        || log_warn "terraform: ~/.local/bin is not on PATH — add it in ~/.config/workbench/local/settings.sh"
+}
+
+# install-tflint is this same module's own installer (below).
+install-terraform() {
+    local tf_version rc
+    _tf_warn_version_managers
+    case "${WORKBENCH_OS}" in
+        Mac)
+            if command -v brew &>/dev/null; then
+                _tf-install-mac
+            else
+                tf_version="$(_iac_latest_terraform_version)"
+                [[ -n "${tf_version}" ]] || { log_error "Could not determine the latest Terraform version"; return 1; }
+                _tf-install-zip "${tf_version}"
+            fi
+            ;;
+        Linux)
+            case "${WORKBENCH_DISTRO:-unknown}" in
+                rhel)   _tf-install-rpm ;;
+                debian) _tf-install-deb ;;
+                *)
+                    tf_version="$(_iac_latest_terraform_version)"
+                    [[ -n "${tf_version}" ]] || { log_error "Could not determine the latest Terraform version"; return 1; }
+                    _tf-install-zip "${tf_version}"
+                    ;;
+            esac
+            ;;
+        *) log_error "Unsupported OS"; return 1 ;;
+    esac
+    rc=$?
+    [[ ${rc} -eq 0 ]] || return "${rc}"
+
+    install-tflint || log_warn "terraform is installed, but installing tflint failed — run 'wb tools install tflint' to retry"
+    return 0
 }
 
 installed-terraform() {
@@ -159,10 +370,13 @@ installed-terraform() {
 # ── tenv install (OpenTofu / Terraform version manager) ───────────────────────
 # Upstream: https://github.com/tofuutils/tenv
 # Release artifacts are cosign-signed. We verify the checksums file and the asset
-# with cosign when it's present, then always confirm the SHA256. The rpm and
-# deb installs (dnf/yum/zypper/apt) additionally REQUIRE cosign verification
-# (_tenv_require_cosign_verified); the pacman and tarball fallbacks accept
-# SHA256-only unless TENV_INSTALL_REQUIRE_COSIGN=true.
+# with cosign when it's present, then always confirm the asset's own SHA256.
+# The rpm and deb installs (dnf/yum/zypper/apt) are installed as root, so they
+# go ahead only once cosign has verified them. Without cosign they fall back
+# to the release tarball in ~/.local/bin (_tenv_fallback_to_tarball): no root,
+# SHA256-only, with a warning. A cosign verification that fails stops the
+# install. The pacman and tarball paths accept SHA256-only. Setting
+# TENV_INSTALL_REQUIRE_COSIGN=true refuses anything cosign hasn't verified.
 
 # Extract a browser_download_url whose filename matches an extended regex.
 _tenv_asset_url() {
@@ -237,31 +451,44 @@ _tenv_fetch_and_verify() {
             log_warn "tenv: cosign present but signature assets missing for ${tag} — skipping cosign step"
         fi
     elif [[ "${TENV_INSTALL_REQUIRE_COSIGN:-false}" == "true" ]]; then
-        log_error "tenv: cosign required (TENV_INSTALL_REQUIRE_COSIGN=true) but not installed. Run install-cosign (workbench-security)."
+        log_error "tenv: cosign required (TENV_INSTALL_REQUIRE_COSIGN=true) but not installed. Run 'wb tools install cosign' (workbench-security)."
         return 1
     else
-        log_warn "tenv: cosign not installed — SHA256-only verification. Run install-cosign (workbench-security) for signature checks."
+        log_warn "tenv: cosign not installed — SHA256-only verification. Run 'wb tools install cosign' (workbench-security) for signature checks."
     fi
 
-    log_info "tenv: verifying SHA256 checksum ..."
-    ( cd "${tmp}" && sha256sum -c "$(basename "${sums_url}")" --ignore-missing ) \
-        || { log_error "tenv: SHA256 verification failed"; return 1; }
+    # The asset's own line only. `sha256sum -c --ignore-missing` passed when
+    # any listed file matched (security status N20).
+    log_info "tenv: verifying SHA256 checksum of ${asset} ..."
+    local expected actual
+    expected="$(awk -v a="${asset}" '$2 == a || $2 == "*" a { print tolower($1); exit }' \
+        "${tmp}/$(basename "${sums_url}")")"
+    actual="$(_wb_sha256 "${tmp}/${asset}")"
+    if [[ -z "${expected}" || "${expected}" != "${actual}" ]]; then
+        log_error "tenv: SHA256 verification of ${asset} failed"
+        return 1
+    fi
 
     _TENV_VERIFIED_ASSET="${tmp}/${asset}"
     return 0
 }
 
-# _tenv_require_cosign_verified <package-kind>
-# Fails closed unless _tenv_fetch_and_verify recorded a cosign verification of
-# the asset. A local package handed to dnf/yum/dpkg is not signature-checked by
-# the package manager (dnf: localpkg_gpgcheck defaults to 0; dpkg -i: never),
-# so without cosign the only protection is a same-release SHA-256, which
-# proves integrity but not origin (security review M3).
-_tenv_require_cosign_verified() {
-    if [[ "${_TENV_COSIGN_VERIFIED:-false}" != "true" ]]; then
-        log_error "tenv: refusing to install a downloaded $1 package without cosign verification. Run install-cosign (workbench-security) first, then retry."
+# _tenv_fallback_to_tarball <package-kind> <tag> <api-json>
+# Last resort when cosign couldn't verify a package that would be installed
+# as root (decision of 2026-10-24): install the release tarball into
+# ~/.local/bin instead — no root, SHA-256 checked, no signature. A cosign
+# verification that FAILED never reaches this: _tenv_fetch_and_verify
+# returns non-zero and the install stops.
+_tenv_fallback_to_tarball() {
+    local kind="$1" tag="$2" api_json="$3"
+    if [[ "${TENV_INSTALL_REQUIRE_COSIGN:-false}" == "true" ]]; then
+        log_error "tenv: TENV_INSTALL_REQUIRE_COSIGN=true and cosign could not verify the ${kind} package — not installing"
         return 1
     fi
+    log_warn "tenv: cosign is not available to verify the ${kind} package, so it won't be installed as root."
+    log_warn "tenv: installing the release tarball to ~/.local/bin instead (SHA-256 checked, not signature-verified)."
+    log_warn "tenv: for the signed ${kind}, install cosign (wb tools install cosign, or your package manager) and run 'wb tools install tenv' again."
+    _tenv-install-tarball "${tag}" "${api_json}"
 }
 
 _tenv-install-rpm() {
@@ -276,14 +503,19 @@ _tenv-install-rpm() {
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.rpm" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     # Every rpm path (dnf, yum, zypper) installs a local file that the package
-    # manager does not verify against a trusted key, so require cosign first.
-    _tenv_require_cosign_verified rpm || { rm -rf "${tmp}"; return 1; }
+    # manager does not verify against a trusted key, so only a cosign-verified
+    # one is installed as root; otherwise fall back to the tarball.
+    if [[ "${_TENV_COSIGN_VERIFIED}" != "true" ]]; then
+        rm -rf "${tmp}"
+        _tenv_fallback_to_tarball rpm "${tag}" "${api_json}"
+        return $?
+    fi
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     if command -v dnf &>/dev/null; then
         # dnf does not check the signature of a LOCAL rpm unless
-        # localpkg_gpgcheck=1 (default 0), which is why cosign verification is
-        # required above. No tenv RPM signing key is pinned, so there is
+        # localpkg_gpgcheck=1 (default 0), which is why only a cosign-verified
+        # rpm gets here. No tenv RPM signing key is pinned, so there is
         # nothing to `rpm -K` against; see README.md "What install-tenv
         # verifies".
         ${ec} dnf install -y "${_TENV_VERIFIED_ASSET}"
@@ -308,8 +540,13 @@ _tenv-install-deb() {
         || { log_error "tenv: could not create a temporary directory"; return 1; }
     _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_${arch}\.deb" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
-    # dpkg -i does no signature check of a local .deb, so require cosign.
-    _tenv_require_cosign_verified deb || { rm -rf "${tmp}"; return 1; }
+    # dpkg -i does no signature check of a local .deb, so only a
+    # cosign-verified one is installed; otherwise fall back to the tarball.
+    if [[ "${_TENV_COSIGN_VERIFIED}" != "true" ]]; then
+        rm -rf "${tmp}"
+        _tenv_fallback_to_tarball deb "${tag}" "${api_json}"
+        return $?
+    fi
     local ec; ec="$(get-elevation-command)" || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: installing $(basename "${_TENV_VERIFIED_ASSET}") ..."
     ${ec} dpkg -i "${_TENV_VERIFIED_ASSET}" || ${ec} apt-get install -f -y
@@ -328,13 +565,20 @@ _tenv-install-arch() {
     local rc=$?; rm -rf "${tmp}"; return $rc
 }
 
-# Generic fallback: extract binaries to ~/.local/bin (root-free). Matches loosely
-# on _Linux_*.tar.gz to stay robust to the goreleaser arch token (x86_64 vs amd64).
+# Generic fallback, and the rpm/deb paths' last resort without cosign: extract
+# binaries to ~/.local/bin (root-free). The tarballs use goreleaser's
+# x86_64/arm64 arch tokens, unlike the packages' amd64/arm64.
 _tenv-install-tarball() {
     local tag="$1" api_json="$2"
     local tmp; tmp="$(mktemp -d)" \
         || { log_error "tenv: could not create a temporary directory"; return 1; }
-    _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_Linux_.*\.tar\.gz" "${api_json}" \
+    local tar_arch
+    case "${WORKBENCH_ARCH}" in
+        x86_64|amd64)  tar_arch="x86_64" ;;
+        aarch64|arm64) tar_arch="arm64" ;;
+        *) log_error "tenv: unsupported architecture ${WORKBENCH_ARCH}"; rm -rf "${tmp}"; return 1 ;;
+    esac
+    _tenv_fetch_and_verify "${tmp}" "${tag}" "tenv_${tag}_Linux_${tar_arch}\.tar\.gz" "${api_json}" \
         || { rm -rf "${tmp}"; return 1; }
     log_info "tenv: extracting to ~/.local/bin ..."
     mkdir -p "${HOME}/.local/bin"
@@ -388,7 +632,7 @@ install-tenv() {
         log_info "tenv installed: $(tenv version 2>/dev/null | head -1)"
         log_info "Set TENV_AUTO_INSTALL=true in ~/.config/workbench/local/settings.sh if you want tofu/terraform versions to install on first use."
         command -v cosign &>/dev/null \
-            || log_warn "cosign not present: tenv falls back to PGP/SHA for tofu & terraform checks. Run install-cosign (workbench-security) for full cosign verification."
+            || log_warn "cosign not present: tenv falls back to PGP/SHA for tofu & terraform checks. Run 'wb tools install cosign' (workbench-security) for full cosign verification."
     fi
     return $rc
 }

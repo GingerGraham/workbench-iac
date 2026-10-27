@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shell/completions/terraform.sh — workbench-iac
 # Terraform / OpenTofu shell completions. Registered at tier: tools
-# (.dotfiles-sync.yml), sourced unconditionally; each block guards on
+# (workbench.yml), sourced unconditionally; each block guards on
 # `command -v`.
 # Ported from workbench-precursor's completions/terraform.sh, unchanged.
 
