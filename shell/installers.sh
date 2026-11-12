@@ -435,12 +435,12 @@ _tenv_fetch_and_verify() {
             _download_file_robust "${sums_pem_url}" "${tmp}/$(basename "${sums_pem_url}")" || return 1
 
             log_info "tenv: verifying checksums signature with cosign ..."
-            ( cd "${tmp}" && _tenv_cosign_verify \
+            ( builtin cd -- "${tmp}" && _tenv_cosign_verify \
                 "$(basename "${sums_url}")" "$(basename "${sums_sig_url}")" "$(basename "${sums_pem_url}")" "${tag}" ) \
                 || { log_error "tenv: cosign verification of checksums failed"; return 1; }
 
             log_info "tenv: verifying ${asset} signature with cosign ..."
-            ( cd "${tmp}" && _tenv_cosign_verify \
+            ( builtin cd -- "${tmp}" && _tenv_cosign_verify \
                 "${asset}" "$(basename "${sig_url}")" "$(basename "${pem_url}")" "${tag}" ) \
                 || { log_error "tenv: cosign verification of ${asset} failed"; return 1; }
             _TENV_COSIGN_VERIFIED=true
@@ -586,7 +586,7 @@ _tenv-install-tarball() {
         || { log_error "tenv: extraction failed"; rm -rf "${tmp}"; return 1; }
     local b
     for b in tenv tofu terraform tf tg tm at terragrunt terramate atmos; do
-        [[ -f "${tmp}/${b}" ]] && { cp "${tmp}/${b}" "${HOME}/.local/bin/${b}"; chmod +x "${HOME}/.local/bin/${b}"; }
+        [[ -f "${tmp}/${b}" ]] && { command cp "${tmp}/${b}" "${HOME}/.local/bin/${b}"; chmod +x "${HOME}/.local/bin/${b}"; }
     done
     rm -rf "${tmp}"
     command -v tenv &>/dev/null || { log_error "tenv: not on PATH after install (is ~/.local/bin on PATH?)"; return 1; }
@@ -714,7 +714,7 @@ _tflint-install-linux() {
                 || { log_error "TFLint: could not remove existing symlink ${existing}"; rm -f "${tmp_link}"; return 1; }
             displaced="removed"
         else
-            mv "${existing}" "${existing}.old" \
+            command mv "${existing}" "${existing}.old" \
                 || { log_error "TFLint: could not move existing ${existing} aside"; rm -f "${tmp_link}"; return 1; }
             displaced="moved"
         fi
@@ -724,7 +724,7 @@ _tflint-install-linux() {
         log_error "TFLint: failed to link ${link}; restoring the previous install"
         rm -f "${tmp_link}"
         case "${displaced}" in
-            moved)   mv "${existing}.old" "${existing}" || log_error "TFLint: could not restore ${existing} from ${existing}.old" ;;
+            moved)   command mv "${existing}.old" "${existing}" || log_error "TFLint: could not restore ${existing} from ${existing}.old" ;;
             removed) ln -s "${restore_target}" "${existing}" || log_error "TFLint: could not restore symlink ${existing} -> ${restore_target}" ;;
         esac
         return 1
