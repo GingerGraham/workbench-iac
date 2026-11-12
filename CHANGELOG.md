@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-12
+
 ### Fixed
 
 - **No more host aliases inside module code (workbench-core D110).**
