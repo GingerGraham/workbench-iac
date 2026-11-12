@@ -435,12 +435,12 @@ _tenv_fetch_and_verify() {
             _download_file_robust "${sums_pem_url}" "${tmp}/$(basename "${sums_pem_url}")" || return 1
 
             log_info "tenv: verifying checksums signature with cosign ..."
-            ( builtin cd "${tmp}" && _tenv_cosign_verify \
+            ( builtin cd -- "${tmp}" && _tenv_cosign_verify \
                 "$(basename "${sums_url}")" "$(basename "${sums_sig_url}")" "$(basename "${sums_pem_url}")" "${tag}" ) \
                 || { log_error "tenv: cosign verification of checksums failed"; return 1; }
 
             log_info "tenv: verifying ${asset} signature with cosign ..."
-            ( builtin cd "${tmp}" && _tenv_cosign_verify \
+            ( builtin cd -- "${tmp}" && _tenv_cosign_verify \
                 "${asset}" "$(basename "${sig_url}")" "$(basename "${pem_url}")" "${tag}" ) \
                 || { log_error "tenv: cosign verification of ${asset} failed"; return 1; }
             _TENV_COSIGN_VERIFIED=true
