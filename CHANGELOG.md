@@ -4,6 +4,16 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **No more host aliases inside module code (workbench-core D110).**
+  `shell/installers.sh` used a bare `cd` for the tenv cosign checks and a
+  bare `cp` and `mv` when installing tenv and TFLint, so a host profile's
+  `cd` function, zoxide or `-i` aliases ran inside workbench code. They are
+  now `builtin cd`, `command cp` and `command mv`. `mv -f` and `rm -f` are
+  unchanged. Adds `tests/check-no-bare-cd.sh` and `tests/check-cd-wrapper.sh`
+  to keep it that way.
+
 ### Changed
 
 - **Bug report template asks for OS family and environment separately.**
