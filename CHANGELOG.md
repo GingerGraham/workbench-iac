@@ -4,6 +4,8 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-22
+
 ### Fixed
 
 - **The Terraform, OpenTofu, Terragrunt and Ansible aliases (`tf*`, `otf*`, `hctf*`, `tg*`, `ap`, `avd`, `ave`) no longer replace an alias or function you already
