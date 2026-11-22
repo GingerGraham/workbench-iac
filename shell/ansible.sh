@@ -114,7 +114,7 @@ if command -v ansible &>/dev/null; then
     # avd/ave alias to the wrapper functions above (not raw `ansible-vault
     # decrypt`/`encrypt`) so their vault_password_file/-p handling is actually
     # reached through the short alias.
-    alias ap="ansible-playbook"
-    alias avd="ansible-vault-decrypt"
-    alias ave="ansible-vault-encrypt"
+    workbench_alias_define ap iac "ansible-playbook"
+    workbench_alias_define avd iac "ansible-vault-decrypt"
+    workbench_alias_define ave iac "ansible-vault-encrypt"
 fi

@@ -4,6 +4,19 @@ All notable changes to `workbench-iac` are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Terraform, OpenTofu, Terragrunt and Ansible aliases (`tf*`, `otf*`, `hctf*`, `tg*`, `ap`, `avd`, `ave`) no longer replace an alias or function you already
+  have.** They are now defined through workbench-core's
+  `workbench_alias_define`. When your shell already uses a name, yours is
+  kept and workbench's isn't defined; the first interactive shell says so
+  once, and `wb status` lists it. Before, an alias here could silently
+  replace a function of the same name, and made `bashsource` fail with
+  `syntax error near unexpected token '('` when a file of yours
+  re-defined that function. Same names and values when nothing is in the
+  way. Needs workbench-core 2.30.0 or later (`core_api: ">=1.10 <2.0"`);
+  `wb update core` first.
+
 ### Changed
 
 - **Agent and contributor guidance covers the stale-base CHANGELOG trap

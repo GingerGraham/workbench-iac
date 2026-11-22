@@ -14,7 +14,7 @@ wb add iac
 
 - `tf*`/`otf*`/`hctf*` aliases (OpenTofu preferred over Terraform when both
   are installed; `hctf*` always targets Terraform specifically) and `tg*`
-  aliases for Terragrunt.
+  aliases for Terragrunt. An alias is not defined when your shell already has an alias or function of that name; yours is kept, and `wb status` lists what was left alone.
 - `get-latest-terraform-version`/`get-latest-opentofu-version`.
 - `ansible-vault-decrypt`/`ansible-vault-encrypt` (honour `ansible.cfg`'s
   `vault_password_file` when present) and `ap`/`avd`/`ave` aliases.
